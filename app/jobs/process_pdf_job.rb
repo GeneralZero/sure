@@ -7,6 +7,31 @@ class ProcessPdfJob < ApplicationJob
 
   def perform(pdf_import)
     return unless pdf_import.is_a?(PdfImport)
+
+    # Sidekiq happily runs several of these concurrently, which is fine
+    # against a cloud API but pointless and actively harmful against a
+    # single local, CPU-bound model: concurrent requests to the same
+    # one-model server don't run in parallel, they just contend for the same
+    # compute and tie up multiple Sidekiq worker threads for hours at a
+    # stretch each, starving every other background job (syncs,
+    # categorization, etc.) in the meantime. This gate ensures at most one
+    # PdfImport processes at a time app-wide, regardless of whether the
+    # imports came from one bulk upload or scattered single uploads over
+    # time.
+    #
+    # Deliberately a fresh perform_later (not retry_job): retry_job counts
+    # against Sidekiq's retry-exhaustion limit, and a PDF waiting behind
+    # several slow ones could need dozens of checks before its turn - that's
+    # normal queueing, not a failing job, and must never land in the dead
+    # set for it. A stuck `importing` claim doesn't deadlock this either:
+    # reset_processing_claim below already reaps anything stuck past 30
+    # minutes back to pending, which stops satisfying this gate on the very
+    # next check.
+    if PdfImport.where(status: :importing).where.not(id: pdf_import.id).exists?
+      self.class.set(wait: 5.minutes).perform_later(pdf_import)
+      return
+    end
+
     return reset_processing_claim(pdf_import) unless pdf_import.pdf_uploaded?
     return if pdf_import.status.in?(%w[complete failed])
     return reset_processing_claim(pdf_import) if pdf_import.ai_processed? && (!pdf_import.statement_with_transactions? || pdf_import.rows_count > 0)
