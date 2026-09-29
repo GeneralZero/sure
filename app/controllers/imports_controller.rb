@@ -77,7 +77,20 @@ class ImportsController < ApplicationController
   end
 
   def create
-    file = import_params[:import_file]
+    file_param = import_params[:import_file]
+
+    # The document-upload file picker allows selecting several PDFs/files at
+    # once (see app/views/imports/new.html.erb's file_field multiple: true),
+    # so a bulk selection arrives as an array here. A lone selection through
+    # that same field still arrives as a 1-element array - unwrap it so the
+    # single-file path below (and its nicer "go straight to this import's
+    # review page" redirect) runs unchanged for the common case.
+    if file_param.is_a?(Array) && file_param.size > 1
+      create_bulk_document_imports(file_param)
+      return
+    end
+
+    file = file_param.is_a?(Array) ? file_param.first : file_param
 
     if file.present? && document_upload_request?
       create_document_import(file)
@@ -181,7 +194,7 @@ class ImportsController < ApplicationController
     end
 
     def import_params
-      params.require(:import).permit(:import_file)
+      params.require(:import).permit(:import_file, import_file: [])
     end
 
     def reject_guest_family_config_import!
@@ -289,6 +302,58 @@ class ImportsController < ApplicationController
         redirect_to new_import_path, notice: t("imports.create.document_uploaded")
       else
         redirect_to new_import_path, alert: t("imports.create.document_upload_failed")
+      end
+    end
+
+    # Uploads several files in one request. Extraction/review/publish per
+    # statement is unchanged and still manual: this only removes the "select
+    # one file, wait for the whole New Import round trip" step per file, not
+    # the review-before-it-hits-the-ledger step.
+    #
+    # Mirrors create_document_import's validation order exactly (PDF
+    # sub-branch -> create_pdf_import's own checks, non-PDF -> vector store
+    # upload) but returns a result instead of redirecting, so it's safe to
+    # call once per file in a loop before issuing a single redirect at the end.
+    def create_bulk_document_imports(files)
+      results = files.map { |file| process_one_bulk_file(file) }
+
+      succeeded = results.count { |ok, _| ok }
+      failures = results.reject { |ok, _| ok }.map { |_, name| name }
+
+      notice = succeeded.positive? ? t("imports.create.pdf_processing", default: "Files uploaded, processing started") : nil
+      alert = failures.any? ? "Could not process: #{failures.join(', ')}" : nil
+
+      redirect_to imports_path, notice: notice, alert: alert
+    end
+
+    def process_one_bulk_file(file)
+      filename = file.respond_to?(:original_filename) ? file.original_filename.to_s : "file"
+
+      adapter = VectorStore.adapter
+      return [ false, filename ] unless adapter
+
+      return [ false, filename ] if file.size > Import::MAX_PDF_SIZE
+
+      ext = File.extname(filename).downcase
+
+      if ext == ".pdf"
+        return [ false, filename ] unless Import::ALLOWED_PDF_MIME_TYPES.include?(file.content_type)
+        return [ false, filename ] unless valid_pdf_file?(file)
+        return [ false, filename ] unless AccountStatement.statement_manager?(Current.user)
+
+        begin
+          pdf_import = PdfImport.create_from_upload!(family: Current.family, file: file, user: Current.user)
+          pdf_import.process_with_ai_later
+          [ true, filename ]
+        rescue AccountStatement::DuplicateUploadError, AccountStatement::InvalidUploadError
+          [ false, filename ]
+        end
+      else
+        supported_extensions = adapter.supported_extensions.map(&:downcase)
+        return [ false, filename ] unless supported_extensions.include?(ext)
+
+        family_document = Current.family.upload_document(file_content: file.read, filename: filename)
+        [ family_document.present?, filename ]
       end
     end
 
