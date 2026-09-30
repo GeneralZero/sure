@@ -20,7 +20,7 @@ export default class extends Controller {
   updateTheme(event) {
     const selectedTheme = event.currentTarget.value;
     if (selectedTheme === "system") {
-      this.setTheme(this.systemPrefersDark());
+      this.setTheme(this.systemPrefersDark(), { persist: false });
     } else if (selectedTheme === "dark") {
       this.setTheme(true);
     } else {
@@ -31,7 +31,7 @@ export default class extends Controller {
   // Applies theme based on the userPreferenceValue (from server)
   applyTheme() {
     if (this.userPreferenceValue === "system") {
-      this.setTheme(this.systemPrefersDark());
+      this.setTheme(this.systemPrefersDark(), { persist: false });
     } else if (this.userPreferenceValue === "dark") {
       this.setTheme(true);
     } else {
@@ -41,9 +41,21 @@ export default class extends Controller {
 
   // Sets the data-theme attribute and broadcasts a `theme:change` event so
   // imperative consumers (D3/SVG/canvas) can repaint without polling.
-  setTheme(isDark) {
+  //
+  // `persist: false` for a "system"-derived theme — otherwise this pins
+  // localStorage.theme to whatever the OS happened to resolve to *at this
+  // pageview*. The anti-FOUC inline script (_dark_mode_check.html.erb) then
+  // trusts that stale explicit value over a fresh OS read on the next load,
+  // flashing the wrong theme for a frame if the OS theme changed since.
+  // Leaving localStorage.theme unset for "system" keeps that script
+  // re-evaluating the live media query every load, as intended.
+  setTheme(isDark, { persist = true } = {}) {
     const theme = isDark ? "dark" : "light";
-    localStorage.theme = theme;
+    if (persist) {
+      localStorage.theme = theme;
+    } else {
+      localStorage.removeItem("theme");
+    }
     document.documentElement.setAttribute("data-theme", theme);
     document.documentElement.dispatchEvent(
       new CustomEvent("theme:change", { detail: { theme } }),
@@ -57,7 +69,7 @@ export default class extends Controller {
   handleSystemThemeChange = (event) => {
     // Only apply system theme changes if the user preference is currently 'system'
     if (this.userPreferenceValue === "system") {
-      this.setTheme(event.matches);
+      this.setTheme(event.matches, { persist: false });
     }
   };
 
