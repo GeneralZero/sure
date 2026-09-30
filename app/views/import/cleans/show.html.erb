@@ -60,8 +60,15 @@
     </div>
   </div>
 
-  <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full p-12">
-    <div class="shadow-border-xs rounded-lg p-3 max-w-2xl mx-auto bg-container">
+  <%# The wrapper spans the full viewport width so its `p-12` padding can
+      center the pagination card, but that padding is still part of a
+      `fixed` element's hit box — with nothing under it but the page's one
+      scrollable `<main>` (see layouts/imports.html.erb), hovering that
+      "empty" margin silently ate wheel-scroll instead of passing it
+      through. `pointer-events-none` on the wrapper (re-enabled on the
+      visible card) fixes that without touching the layout. %>
+  <div class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full p-12 pointer-events-none">
+    <div class="shadow-border-xs rounded-lg p-3 max-w-2xl mx-auto bg-container pointer-events-auto">
       <%= render "shared/pagination", pagy: @pagy %>
     </div>
   </div>
