@@ -18,13 +18,6 @@ export default class extends Controller {
     document.addEventListener("drop", this.boundDrop)
   }
 
-  disconnect() {
-    document.removeEventListener("dragover", this.boundDragOver)
-    document.removeEventListener("dragenter", this.boundDragEnter)
-    document.removeEventListener("dragleave", this.boundDragLeave)
-    document.removeEventListener("drop", this.boundDrop)
-  }
-
   dragEnter(event) {
     event.preventDefault()
     this.dragDepth++
@@ -58,8 +51,32 @@ export default class extends Controller {
         this.inputTarget.files = event.dataTransfer.files
         this.formTarget.requestSubmit()
       } else {
-        alert("Please upload a valid CSV file.")
+        this.showInvalidFileMessage()
       }
     }
+  }
+
+  // A blocking window.alert() halted the whole page for an easily-recovered
+  // mistake; an inline message next to the dropzone (auto-dismissed) says the
+  // same thing without freezing the tab.
+  showInvalidFileMessage() {
+    this.invalidFileMessage?.remove()
+    clearTimeout(this.invalidFileMessageTimer)
+
+    const message = document.createElement("p")
+    message.className = "text-sm text-destructive mt-2"
+    message.textContent = "Please upload a valid CSV file."
+    this.formTarget.prepend(message)
+
+    this.invalidFileMessage = message
+    this.invalidFileMessageTimer = setTimeout(() => message.remove(), 5000)
+  }
+
+  disconnect() {
+    document.removeEventListener("dragover", this.boundDragOver)
+    document.removeEventListener("dragenter", this.boundDragEnter)
+    document.removeEventListener("dragleave", this.boundDragLeave)
+    document.removeEventListener("drop", this.boundDrop)
+    clearTimeout(this.invalidFileMessageTimer)
   }
 }

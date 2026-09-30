@@ -13,7 +13,16 @@
           <%= icon "check" %>
         </span>
       </button>
-      <%= button_to invite_code_path(invite_code), method: :delete, data: { confirm: "Are you sure?" }, class: "ml-2 text-red-600 text-xs" do %>
+      <%# `data-confirm` is a rails-ujs attribute; this app replaces the
+          native confirm with a themed one via Turbo.config.forms.confirm
+          (see confirm_dialog_controller.js), which reads `turbo_confirm`
+          instead — rails-ujs isn't loaded at all, so this was a silent
+          no-op and the delete had no confirmation step whatsoever. %>
+      <%= button_to invite_code_path(invite_code),
+            method: :delete,
+            aria: { label: t(".delete") },
+            data: { turbo_confirm: CustomConfirm.for_resource_deletion("invite_code") },
+            class: "ml-2 text-red-600 text-xs" do %>
         <%= icon("trash-2", size: "sm", class: "inline mr-1") %>
       <% end %>
     </div>
