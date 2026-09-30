@@ -6,7 +6,7 @@
       <div class="md:px-3 flex items-center gap-3">
         <% if @release_notes[:avatar].present? %>
           <div class="text-inverse shrink-0 w-9 h-9">
-            <%= image_tag @release_notes[:avatar], class: "rounded-full w-full h-full object-cover" %>
+            <%= image_tag @release_notes[:avatar], class: "rounded-full w-full h-full object-cover", alt: "" %>
           </div>
         <% else %>
           <div class="bg-surface-inset text-secondary shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium">

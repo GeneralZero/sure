@@ -14,7 +14,8 @@
           <% if transaction.merchant&.logo_url.present? %>
             <%= image_tag Setting.transform_brand_fetch_url(transaction.merchant.logo_url),
                 class: "w-9 h-9 rounded-full border border-secondary",
-                loading: "lazy" %>
+                loading: "lazy",
+                alt: "" %>
           <% else %>
             <div class="hidden lg:flex">
               <%= render DS::FilledIcon.new(

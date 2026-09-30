@@ -25,7 +25,8 @@
             <% if merchant.logo_url.present? %>
               <%= image_tag Setting.transform_brand_fetch_url(merchant.logo_url),
                   class: "w-6 h-6 rounded-full border border-secondary",
-                  loading: "lazy" %>
+                  loading: "lazy",
+                  alt: "" %>
             <% else %>
               <%= render DS::FilledIcon.new(
                 variant: :text,

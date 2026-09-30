@@ -5,7 +5,8 @@
 <% if series.merchant&.logo_url.present? %>
   <%= image_tag Setting.transform_brand_fetch_url(series.merchant.logo_url),
         class: "w-9 h-9 rounded-full shrink-0 border border-secondary",
-        loading: "lazy" %>
+        loading: "lazy",
+        alt: "" %>
 <% else %>
   <%= render DS::FilledIcon.new(
         variant: :text,
