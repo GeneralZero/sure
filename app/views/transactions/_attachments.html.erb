@@ -15,7 +15,7 @@
           } do |form| %>
       <div class="space-y-3">
         <div>
-          <div class="flex flex-col items-center justify-center w-full py-8 border border-secondary border-dashed rounded-xl cursor-pointer bg-surface-inset hover:bg-surface-inset-hover transition-colors text-center px-4"
+          <div class="flex flex-col items-center justify-center w-full py-8 border border-secondary border-dashed rounded-xl cursor-pointer bg-surface-inset hover:bg-surface-inset-hover transition-colors text-center px-4 focus-ring-within"
                data-action="click->attachment-upload#triggerFileInput">
 
             <div data-attachment-upload-target="uploadText" class="flex flex-col items-center">
@@ -28,10 +28,13 @@
               <p class="text-sm font-medium text-primary truncate w-full"></p>
             </div>
 
+            <%# `sr-only` (not `hidden`) keeps the input in the tab order — a
+                focused native file input already opens the picker on
+                Enter/Space, so keyboard users reach it without any JS. %>
             <%= form.file_field :attachments,
                   multiple: true,
                   accept: Transaction::ALLOWED_CONTENT_TYPES.join(","),
-                  class: "hidden",
+                  class: "sr-only",
                   data: {
                     attachment_upload_target: "fileInput",
                     action: "change->attachment-upload#updateSubmitButton"
