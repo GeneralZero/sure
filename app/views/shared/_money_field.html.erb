@@ -33,9 +33,10 @@
         <% end %>
       <% end %>
       <div class="form-field__actions">
-        <div data-controller="tooltip">
+        <% money_field_tooltip_id = "money-field-tooltip-#{SecureRandom.hex(4)}" %>
+        <div data-controller="tooltip" tabindex="0" class="focus-ring rounded" aria-describedby="<%= money_field_tooltip_id %>">
           <%= icon "help-circle", size: "sm", color: "default", class: "cursor-help" %>
-          <div role="tooltip" data-tooltip-target="tooltip" class="tooltip bg-inverse text-inverse text-sm p-2 rounded-md w-64">
+          <div role="tooltip" id="<%= money_field_tooltip_id %>" data-tooltip-target="tooltip" class="tooltip bg-inverse text-inverse text-sm p-2 rounded-md w-64">
             <%= options[:label_tooltip] %>
           </div>
         </div>

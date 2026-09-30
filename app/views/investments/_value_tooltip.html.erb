@@ -1,8 +1,9 @@
 <%# locals: (balance:, holdings:, cash:) %>
 
-<div data-controller="tooltip" data-tooltip-placement-value="right" data-tooltip-offset-value=10 data-tooltip-cross-axis-value=50>
+<% tooltip_id = "value-tooltip-#{SecureRandom.hex(4)}" %>
+<div data-controller="tooltip" data-tooltip-placement-value="right" data-tooltip-offset-value=10 data-tooltip-cross-axis-value=50 tabindex="0" class="focus-ring rounded" aria-describedby="<%= tooltip_id %>">
   <%= icon("info", size: "sm") %>
-  <div role="tooltip" data-tooltip-target="tooltip" class="tooltip bg-inverse text-sm p-2 rounded-md w-64">
+  <div role="tooltip" id="<%= tooltip_id %>" data-tooltip-target="tooltip" class="tooltip bg-inverse text-sm p-2 rounded-md w-64">
     <div class="text-inverse">
       <%= t(".total_value_tooltip") %>
     </div>

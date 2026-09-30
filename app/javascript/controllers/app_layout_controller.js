@@ -11,6 +11,14 @@ export default class extends Controller {
     "collapsedTransition",
   ];
 
+  connect() {
+    document.addEventListener("keydown", this.handleKeydown);
+  }
+
+  disconnect() {
+    document.removeEventListener("keydown", this.handleKeydown);
+  }
+
   openMobileSidebar() {
     this.mobileSidebarTarget.classList.remove("hidden");
   }
@@ -18,6 +26,20 @@ export default class extends Controller {
   closeMobileSidebar() {
     this.mobileSidebarTarget.classList.add("hidden");
   }
+
+  // Escape closes the mobile nav overlay, matching every other full-screen
+  // panel in the app. DS::Dialog gets this for free from the native
+  // <dialog> element; this is a plain full-bleed div (it covers the whole
+  // viewport, so there's no "outside" to click either), so it needs its
+  // own listener. The explicit close button remained the only way out
+  // otherwise.
+  handleKeydown = (event) => {
+    if (event.key !== "Escape") return;
+    if (!this.hasMobileSidebarTarget) return;
+    if (this.mobileSidebarTarget.classList.contains("hidden")) return;
+
+    this.closeMobileSidebar();
+  };
 
   toggleLeftSidebar() {
     const isOpen = this.leftSidebarTarget.classList.contains("w-full");

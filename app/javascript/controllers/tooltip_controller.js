@@ -31,11 +31,20 @@ export default class extends Controller {
   addEventListeners() {
     this.element.addEventListener("mouseenter", this.show);
     this.element.addEventListener("mouseleave", this.hide);
+    // Keyboard parity: keyboard users reach the trigger via Tab + focus,
+    // not hover. Without these the tooltip never appears for them.
+    this.element.addEventListener("focusin", this.show);
+    this.element.addEventListener("focusout", this.hide);
+    // Esc-to-dismiss matches the WAI-ARIA Authoring Practices tooltip pattern.
+    this.element.addEventListener("keydown", this.handleKeydown);
   }
 
   removeEventListeners() {
     this.element.removeEventListener("mouseenter", this.show);
     this.element.removeEventListener("mouseleave", this.hide);
+    this.element.removeEventListener("focusin", this.show);
+    this.element.removeEventListener("focusout", this.hide);
+    this.element.removeEventListener("keydown", this.handleKeydown);
   }
 
   show = () => {
@@ -45,6 +54,12 @@ export default class extends Controller {
 
   hide = () => {
     this.tooltipTarget.style.display = "none";
+  };
+
+  handleKeydown = (event) => {
+    if (event.key === "Escape" && this.tooltipTarget.style.display !== "none") {
+      this.hide();
+    }
   };
 
   startAutoUpdate() {
