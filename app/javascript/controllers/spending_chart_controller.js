@@ -17,6 +17,7 @@ export default class extends Controller {
     currency: { type: String, default: "USD" },
     currentLabel: { type: String, default: "Current" },
     previousLabel: { type: String, default: "Previous" },
+    ariaLabel: { type: String, default: "Cumulative spending chart" },
   };
 
   _resizeObserver = null;
@@ -68,7 +69,9 @@ export default class extends Controller {
       .append("svg")
       .attr("width", width)
       .attr("height", height)
-      .attr("viewBox", [0, 0, width, height]);
+      .attr("viewBox", [0, 0, width, height])
+      .attr("role", "img")
+      .attr("aria-label", this.ariaLabelValue);
 
     const group = svg
       .append("g")

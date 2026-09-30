@@ -20,6 +20,7 @@ export default class extends Controller {
     currencySymbol: { type: String, default: "$" },
     startDate: String,
     endDate: String,
+    ariaLabel: { type: String, default: "Cash flow chart" },
   };
 
   // Visual constants
@@ -123,6 +124,8 @@ export default class extends Controller {
       .append("svg")
       .attr("width", width)
       .attr("height", height)
+      .attr("role", "img")
+      .attr("aria-label", this.ariaLabelValue)
       .style("opacity", animate ? 0 : 1);
 
     const effectivePadding = this.#calculateNodePadding(nodes.length, height);

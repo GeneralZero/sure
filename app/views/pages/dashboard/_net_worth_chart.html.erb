@@ -23,6 +23,7 @@
     data-controller="time-series-chart"
     data-time-series-chart-data-value="<%= series.to_json %>"
     data-time-series-chart-selectable-value="true"
+    data-time-series-chart-aria-label-value="<%= t(".chart_aria_label", default: "Net worth over time") %>"
     draggable="false"></div>
   <% else %>
     <div class="w-full h-full flex items-center justify-center">

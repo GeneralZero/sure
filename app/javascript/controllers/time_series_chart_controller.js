@@ -11,6 +11,7 @@ export default class extends Controller {
     useLabels: { type: Boolean, default: true },
     useTooltip: { type: Boolean, default: true },
     selectable: { type: Boolean, default: false },
+    ariaLabel: { type: String, default: "Chart" },
   };
 
   _d3SvgMemo = null;
@@ -616,7 +617,9 @@ export default class extends Controller {
         0,
         this._d3InitialContainerWidth,
         this._d3InitialContainerHeight,
-      ]);
+      ])
+      .attr("role", "img")
+      .attr("aria-label", this.ariaLabelValue);
   }
 
   _createMainGroup() {

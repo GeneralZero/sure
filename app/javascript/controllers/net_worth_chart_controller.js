@@ -7,6 +7,7 @@ export default class extends TimeSeriesChartController {
   static values = {
     assetsLabel: { type: String, default: "Assets" },
     liabilitiesLabel: { type: String, default: "Liabilities" },
+    ariaLabel: { type: String, default: "Net worth over time" },
   };
 
   _normalizeDataPoints() {

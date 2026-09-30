@@ -16,6 +16,7 @@ export default class extends Controller {
     enableClick: { type: Boolean, default: false },
     startDate: String,
     endDate: String,
+    ariaLabel: { type: String, default: "Breakdown chart" },
   };
 
   #viewBoxSize = 100;
@@ -102,7 +103,9 @@ export default class extends Controller {
       .append("svg")
       .attr("viewBox", `0 0 ${this.#viewBoxSize} ${this.#viewBoxSize}`) // Square aspect ratio
       .attr("preserveAspectRatio", "xMidYMid meet")
-      .attr("class", "w-full h-full");
+      .attr("class", "w-full h-full")
+      .attr("role", "img")
+      .attr("aria-label", this.ariaLabelValue);
 
     const pie = d3
       .pie()
