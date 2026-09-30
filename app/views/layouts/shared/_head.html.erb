@@ -13,7 +13,9 @@
   <%= render "layouts/privacy_mode_check" %>
   <%= turbo_refreshes_with method: :morph, scroll: :preserve %>
 
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <%# No maximum-scale: WCAG 1.4.4 requires letting users pinch-zoom to read
+      text; locking it blocks low-vision users on mobile entirely. %>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
