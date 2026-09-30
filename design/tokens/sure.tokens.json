@@ -291,7 +291,7 @@
     "text-primary":   { "$type": "utility", "$value": "{color.gray.900}", "$extensions": { "sure.utility": { "prefix": "text" }, "sure.dark": "{color.white}" } },
     "text-inverse":   { "$type": "utility", "$value": "{color.white}",    "$extensions": { "sure.utility": { "prefix": "text" }, "sure.dark": "{color.gray.900}" } },
     "text-secondary": { "$type": "utility", "$value": "{color.gray.500}", "$extensions": { "sure.utility": { "prefix": "text" }, "sure.dark": "{color.gray.300}" } },
-    "text-subdued":   { "$type": "utility", "$value": "{color.gray.400}", "$extensions": { "sure.utility": { "prefix": "text" }, "sure.dark": "{color.gray.400}" } },
+    "text-subdued":   { "$type": "utility", "$value": "{color.gray.500}", "$extensions": { "sure.utility": { "prefix": "text" }, "sure.dark": "{color.gray.400}" } },
 
     "shadow-border-xs": {
       "$type": "utility",
