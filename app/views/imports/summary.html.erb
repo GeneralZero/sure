@@ -38,6 +38,27 @@
         <% end %>
       </dl>
 
+      <% if @import.already_recorded_count.positive? %>
+        <%# The "already recorded" count above says *how many* matched; this
+            lists *which* ones, so a false match (same amount, different
+            transaction — the matcher doesn't check name, only amount + a
+            few days either side) is something the user can actually catch
+            instead of silently losing a transaction to it. %>
+        <%= render DS::Disclosure.new(title: t(".already_recorded_details_toggle", count: @import.already_recorded_count)) do %>
+          <div class="max-h-64 overflow-y-auto space-y-1">
+            <% @import.already_recorded_entries.order(date: :desc).each do |entry| %>
+              <div class="flex items-center justify-between gap-4 px-2 py-1.5 text-sm">
+                <div class="min-w-0">
+                  <p class="text-primary truncate privacy-sensitive"><%= entry.name %></p>
+                  <p class="text-xs text-secondary"><%= l(entry.date, format: :short) %></p>
+                </div>
+                <p class="text-primary tabular-nums shrink-0 privacy-sensitive"><%= format_money(Money.new(entry.amount, entry.currency)) %></p>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      <% end %>
+
       <%# The case this dialog exists for: an import that finished having created
           nothing looks identical to one that found nothing. %>
       <% if @import.reconciled_anything? && @import.awaiting_review_count.zero? && @import.imported_count.zero? %>

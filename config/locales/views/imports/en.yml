@@ -296,6 +296,9 @@ en:
       extracted: "Found on the statement"
       already_recorded: "Already recorded"
       already_recorded_hint: "Matched to a transaction this account already had, and marked reconciled."
+      already_recorded_details_toggle:
+        one: "View the %{count} matched transaction"
+        other: "View the %{count} matched transactions"
       imported: "Imported as new"
       awaiting_review: "Waiting to be imported"
       fully_reconciled:
