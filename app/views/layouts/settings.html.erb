@@ -9,9 +9,16 @@
       </div>
     </div>
 
+    <%# The scroll container spans the full width of <main> (not just the
+        centered max-w-4xl column below it) - on a wide viewport, <main> has
+        no overflow handling of its own, so the empty gutter beside the
+        centered column used to belong to <main> itself. Hovering there
+        silently ate the scroll wheel instead of scrolling the page: body/
+        html never scroll either (see _htmldoc.html.erb), so there was no
+        fallback once a wheel event missed this element. %>
     <main id="main" class="grow flex h-full" data-notification-tray-target="main">
-      <div class="relative max-w-4xl mx-auto flex flex-col w-full h-full">
-        <div data-controller="settings-scroll" class="grow flex flex-col overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
+      <div data-controller="settings-scroll" class="grow flex flex-col w-full h-full overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
+        <div class="relative max-w-4xl mx-auto flex flex-col w-full">
           <div class="sticky top-0 z-10 px-3 md:px-10 pt-1.5 md:pt-3 pb-3 bg-surface border-b border-tertiary shrink-0">
             <% if content_for?(:breadcrumbs) %>
               <%= yield :breadcrumbs %>
