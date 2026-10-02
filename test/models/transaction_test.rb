@@ -571,6 +571,21 @@ class TransactionTest < ActiveSupport::TestCase
     assert_empty scope.category_from("ai", metadata: { confidence: 0.5 }).pluck(:id)
   end
 
+  test "detect_activity_label recognizes obvious patterns" do
+    assert_equal "Dividend", Transaction.detect_activity_label("Dividend Payment - AAPL", 12.34)
+    assert_equal "Dividend", Transaction.detect_activity_label("Qualified Dividend", 1)
+    assert_equal "Interest", Transaction.detect_activity_label("Interest Income", 1)
+    assert_equal "Fee", Transaction.detect_activity_label("Management Fee", -5)
+    assert_equal "Contribution", Transaction.detect_activity_label("Employer Match", 100)
+    assert_equal "Contribution", Transaction.detect_activity_label("401k Contribution", 100)
+  end
+
+  test "detect_activity_label returns nil for unrecognized or blank names" do
+    assert_nil Transaction.detect_activity_label("Wire Transfer to Checking", 500)
+    assert_nil Transaction.detect_activity_label("", 1)
+    assert_nil Transaction.detect_activity_label(nil, 1)
+  end
+
   private
     # Whether each SQL form of "is this transaction pending?" says it is.
     def sql_pending_answers(transaction)

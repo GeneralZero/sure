@@ -129,6 +129,7 @@ class PdfImport < Import
 
         Transaction.new(
           category: mappings.categories.mappable_for(row.category),
+          investment_activity_label: investment_activity_label_for(row),
           entry: Entry.new(
             account: account,
             date: row.date_iso,
@@ -247,10 +248,21 @@ class PdfImport < Import
     provider = Provider::Registry.preferred_llm_provider
     raise Provider::Error, I18n.t("imports.pdf_import.errors.provider_not_configured") unless provider
 
-    response = provider.extract_bank_statement(
-      pdf_content: pdf_file_content,
-      family: family
-    )
+    # Investment statements get the cash-only extractor (dividends, interest,
+    # fees, contributions/withdrawals) — see
+    # Provider::Openai::InvestmentStatementExtractor's header comment for why
+    # buy/sell trade extraction is deliberately out of scope for now.
+    response = if investment_statement?
+      provider.extract_investment_statement(
+        pdf_content: pdf_file_content,
+        family: family
+      )
+    else
+      provider.extract_bank_statement(
+        pdf_content: pdf_file_content,
+        family: family
+      )
+    end
 
     unless response.success?
       error_message = response.error&.message || "Unknown extraction error"
@@ -270,8 +282,12 @@ class PdfImport < Import
     document_type == "bank_statement"
   end
 
+  def investment_statement?
+    document_type == "investment_statement"
+  end
+
   def statement_with_transactions?
-    document_type.in?(%w[bank_statement credit_card_statement])
+    document_type.in?(%w[bank_statement credit_card_statement investment_statement])
   end
 
   def has_extracted_transactions?
@@ -454,6 +470,23 @@ class PdfImport < Import
   end
 
   private
+
+    # Investment-statement rows carry the AI's own activity classification in
+    # row.category (Dividend/Interest/Fee/Contribution/Withdrawal/Other —
+    # see Provider::Openai::InvestmentStatementExtractor's schema), a more
+    # direct signal than pattern-matching the row's name text — prefer it
+    # when it lines up with a real Transaction::ACTIVITY_LABELS value, and
+    # fall back to Transaction.detect_activity_label (the same name-based
+    # detection provider sync uses) otherwise. Bank/credit-card statement
+    # rows never reach an investment account in practice, but the check is
+    # by account type rather than document type so the label only ever
+    # applies where it's actually meaningful.
+    def investment_activity_label_for(row)
+      return nil unless account.investment?
+
+      from_category = Transaction::ACTIVITY_LABELS.find { |label| label.casecmp?(row.category.to_s) }
+      from_category || Transaction.detect_activity_label(row.name, row.signed_amount)
+    end
 
     # A statement's posting date routinely differs by a day or two from the date
     # a provider recorded for the same transaction, so matching allows a small

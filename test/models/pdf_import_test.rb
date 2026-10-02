@@ -86,6 +86,69 @@ class PdfImportTest < ActiveSupport::TestCase
     assert @import.valid?
   end
 
+  test "investment_statement? is true only for investment_statement" do
+    @import.document_type = "investment_statement"
+    assert @import.investment_statement?
+
+    @import.document_type = "bank_statement"
+    assert_not @import.investment_statement?
+  end
+
+  test "statement_with_transactions? includes investment statements" do
+    @import.document_type = "investment_statement"
+    assert @import.statement_with_transactions?
+
+    @import.document_type = "bank_statement"
+    assert @import.statement_with_transactions?
+
+    @import.document_type = "credit_card_statement"
+    assert @import.statement_with_transactions?
+
+    @import.document_type = "financial_document"
+    assert_not @import.statement_with_transactions?
+  end
+
+  test "import! sets investment_activity_label on investment accounts, from the row's AI-assigned category" do
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:investment)))
+    import.update!(document_type: "investment_statement")
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: Date.current.strftime(import.date_format),
+      amount: "-150.00",
+      name: "Dividend - VTI",
+      category: "Dividend",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    entry = import.account.entries.find_by!(name: "Dividend - VTI")
+    assert_equal "Dividend", entry.entryable.investment_activity_label
+  end
+
+  test "import! leaves investment_activity_label nil on non-investment accounts" do
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:depository)))
+    import.update!(document_type: "bank_statement")
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: Date.current.strftime(import.date_format),
+      amount: "-5.50",
+      name: "Coffee Shop",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    entry = import.account.entries.find_by!(name: "Coffee Shop")
+    assert_nil entry.entryable.investment_activity_label
+  end
+
   test "process_with_ai_later enqueues ProcessPdfJob" do
     import = PdfImport.create_from_statement!(statement: create_pdf_statement)
 

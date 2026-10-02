@@ -573,6 +573,7 @@ en:
       already_recorded_note:
         one: "%{count} was already in this account and was matched to the statement."
         other: "%{count} were already in this account and were matched to the statement."
+      investment_statement_scope_note: "Only cash activity (dividends, interest, fees, contributions) is extracted from investment statements. Buy/sell trades and holdings are not yet supported."
       complete_fully_reconciled:
         one: "Every transaction on this statement was already in your account. %{count} was matched and marked reconciled — nothing needed importing."
         other: "Every transaction on this statement was already in your account. All %{count} were matched and marked reconciled — nothing needed importing."

@@ -270,6 +270,29 @@ class Provider::Anthropic < Provider
     end
   end
 
+  def extract_investment_statement(pdf_content:, model: "", family: nil)
+    with_provider_response do
+      effective_model = model.presence || @default_model
+
+      trace = create_langfuse_trace(
+        name: "anthropic.extract_investment_statement",
+        input: { pdf_size: pdf_content&.bytesize }
+      )
+
+      result = InvestmentStatementExtractor.new(
+        client: client,
+        pdf_content: pdf_content,
+        model: effective_model,
+        langfuse_trace: trace,
+        family: family
+      ).extract
+
+      upsert_langfuse_trace(trace: trace, output: { transaction_count: result[:transactions].size })
+
+      result
+    end
+  end
+
   def chat_response(
     prompt,
     model:,

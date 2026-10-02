@@ -1020,27 +1020,10 @@ class Account::ProviderImportAdapter
   # @param name [String] Transaction name/description
   # @param amount [BigDecimal, Numeric] Transaction amount (positive or negative)
   # @return [String, nil] Detected activity label or nil if no pattern matches
+  # See Transaction.detect_activity_label for the shared detection rules —
+  # kept here as a thin alias so every call site in this file is unaffected.
   def detect_activity_label(name, amount)
-    return nil if name.blank?
-
-    name_lower = name.downcase.strip
-
-    # Only detect the most obvious patterns - be conservative to avoid false positives
-    # Users can manually adjust labels for edge cases
-    case name_lower
-    when /^dividend\b/, /\bdividend payment\b/, /\bqualified dividend\b/, /\bordinary dividend\b/
-      "Dividend"
-    when /^interest\b/, /\binterest income\b/, /\binterest payment\b/
-      "Interest"
-    when /^fee\b/, /\bmanagement fee\b/, /\badvisory fee\b/, /\btransaction fee\b/
-      "Fee"
-    when /\bemployer match\b/, /\bemployer contribution\b/
-      "Contribution"
-    when /\b401[k\(]/, /\bira contribution\b/, /\broth contribution\b/
-      "Contribution"
-    else
-      nil # Let user categorize manually - default to nil for safety
-    end
+    Transaction.detect_activity_label(name, amount)
   end
 
   # Determines why an entry should be skipped during sync.

@@ -344,6 +344,39 @@ class Transaction < ApplicationRecord
     end
   end
 
+  # Auto-detects an investment activity label from a transaction's name and
+  # amount. Only the most obvious patterns are matched — conservative on
+  # purpose, since this feeds account.investment? transactions from more than
+  # one import path (provider sync, PDF statement import) and a wrong guess
+  # is harder to notice than a blank label the user can set manually. Shared
+  # so every caller detects the same label the same way, rather than each
+  # import path re-implementing its own version of "what counts as a
+  # dividend" that drifts from the others over time.
+  #
+  # @param name [String] transaction name/description
+  # @param amount [BigDecimal, Numeric] transaction amount (positive or negative)
+  # @return [String, nil] one of ACTIVITY_LABELS, or nil if no pattern matches
+  def self.detect_activity_label(name, amount)
+    return nil if name.blank?
+
+    name_lower = name.downcase.strip
+
+    case name_lower
+    when /^dividend\b/, /\bdividend payment\b/, /\bqualified dividend\b/, /\bordinary dividend\b/
+      "Dividend"
+    when /^interest\b/, /\binterest income\b/, /\binterest payment\b/
+      "Interest"
+    when /^fee\b/, /\bmanagement fee\b/, /\badvisory fee\b/, /\btransaction fee\b/
+      "Fee"
+    when /\bemployer match\b/, /\bemployer contribution\b/
+      "Contribution"
+    when /\b401[k\(]/, /\bira contribution\b/, /\broth contribution\b/
+      "Contribution"
+    else
+      nil # Let user categorize manually - default to nil for safety
+    end
+  end
+
   # Overarching grouping method for all transfer-type transactions
   def transfer?
     TRANSFER_KINDS.include?(kind)

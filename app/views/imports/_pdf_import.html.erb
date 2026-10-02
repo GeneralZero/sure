@@ -45,6 +45,11 @@
                 <%= t("imports.pdf_import.already_recorded_note", count: import.already_recorded_count) %>
               </span>
             <% end %>
+            <% if import.investment_statement? %>
+              <span class="block mt-1 text-xs text-subdued">
+                <%= t("imports.pdf_import.investment_statement_scope_note") %>
+              </span>
+            <% end %>
           </p>
         </div>
 
