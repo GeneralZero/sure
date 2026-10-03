@@ -469,6 +469,50 @@ class PdfImport < Import
     pdf_file.filename.to_s if pdf_file.attached?
   end
 
+  # The statement's own identifying details, for the account picker: a
+  # household with several accounts at the same institution (checking +
+  # savings, or several brokerage accounts) can't be told apart by document
+  # type alone, and the AI already extracts exactly what a human would check
+  # the paper statement against.
+  def detected_account_number
+    extracted_data&.dig("account_number").presence
+  end
+
+  def detected_bank_name
+    extracted_data&.dig("bank_name").presence
+  end
+
+  def detected_account_holder
+    extracted_data&.dig("account_holder").presence
+  end
+
+  # A single display line built from whichever of the three details above are
+  # actually present, so the view never has to reason about which subset the
+  # AI managed to read off this particular statement. Nil when none are.
+  def detected_account_summary
+    parts = [ detected_bank_name, (detected_account_number && "····#{detected_account_number}"), detected_account_holder ].compact
+    parts.join(" • ") if parts.any?
+  end
+
+  # Best-guess match between this statement and one of the family's own
+  # accounts, from `candidates` (expected already scoped to what the current
+  # user may pick from). Matched against the account's display name rather
+  # than a dedicated field: nothing else reliably carries a linked or manual
+  # account's last-4 digits, and this app's own naming convention already
+  # puts them there (e.g. "Spending Account (6654)"). A false negative (no
+  # suggestion) is the safe failure here -- the picker still works by hand --
+  # so this never guesses without the statement's own digits to go on, and
+  # never resolves multiple same-digit matches to one of them.
+  def suggested_account(candidates)
+    return nil if account.present?
+
+    last4 = detected_account_number
+    return nil if last4.blank?
+
+    matches = candidates.select { |a| a.name.to_s.include?(last4) }
+    matches.first if matches.one?
+  end
+
   def statement_backed?
     account_statement&.original_file&.attached?
   end

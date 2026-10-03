@@ -337,6 +337,47 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_not_includes @import.mapping_steps, Import::AccountMapping
   end
 
+  test "suggested_account matches a candidate whose name contains the detected account number" do
+    accounts(:depository).update!(name: "Checking (1234)")
+    accounts(:credit_card).update!(name: "Card (5678)")
+    @import.update!(extracted_data: { "account_number" => "1234" })
+
+    assert_equal accounts(:depository), @import.suggested_account([ accounts(:depository), accounts(:credit_card) ])
+  end
+
+  test "suggested_account returns nil without a detected account number" do
+    accounts(:depository).update!(name: "Checking (1234)")
+    @import.update!(extracted_data: {})
+
+    assert_nil @import.suggested_account([ accounts(:depository) ])
+  end
+
+  test "suggested_account returns nil once an account is already assigned" do
+    accounts(:depository).update!(name: "Checking (1234)")
+    @import.update!(account: accounts(:depository), extracted_data: { "account_number" => "1234" })
+
+    assert_nil @import.suggested_account([ accounts(:depository) ])
+  end
+
+  test "suggested_account returns nil when more than one candidate matches" do
+    accounts(:depository).update!(name: "Checking (1234)")
+    accounts(:credit_card).update!(name: "Old Checking (1234)")
+    @import.update!(extracted_data: { "account_number" => "1234" })
+
+    assert_nil @import.suggested_account([ accounts(:depository), accounts(:credit_card) ])
+  end
+
+  test "detected_account_summary builds from whichever fields are present" do
+    @import.update!(extracted_data: { "bank_name" => "Ally Bank", "account_number" => "6654", "account_holder" => "BRIAN RIDINGS" })
+    assert_equal "Ally Bank • ····6654 • BRIAN RIDINGS", @import.detected_account_summary
+
+    @import.update!(extracted_data: { "account_number" => "6654" })
+    assert_equal "····6654", @import.detected_account_summary
+
+    @import.update!(extracted_data: {})
+    assert_nil @import.detected_account_summary
+  end
+
   test "destroying import purges attached pdf_file" do
     @import.pdf_file.attach(
       io: StringIO.new("fake-pdf-content"),

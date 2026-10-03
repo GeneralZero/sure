@@ -562,6 +562,8 @@ en:
       select_account: Import to Account
       select_account_placeholder: Select an account...
       select_account_hint: Choose which account to import these transactions into.
+      select_account_suggested_hint: "We matched this to %{account} based on the statement's account number — double check before saving."
+      detected_account_summary: "Statement details: %{summary}"
       no_accounts: No accounts available. Please create an account first.
       create_account: Create Account
       save_account: Save

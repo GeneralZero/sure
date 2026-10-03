@@ -1,0 +1,36 @@
+<%# locals: (import:, heading_id:) %>
+
+<div class="space-y-2">
+  <h2 id="<%= heading_id %>" class="font-medium text-primary"><%= t("imports.pdf_import.select_account") %></h2>
+
+  <% if import.detected_account_summary %>
+    <p class="text-xs text-secondary"><%= t("imports.pdf_import.detected_account_summary", summary: import.detected_account_summary) %></p>
+  <% end %>
+
+  <%= styled_form_with model: import, scope: :import, url: import_path(import), method: :patch, class: "space-y-2" do |f| %>
+    <%# Provider-backed accounts are offered too: rows are matched against
+        existing transactions before they are ever shown, so importing a
+        statement for a synced account can no longer duplicate what sync
+        already brought in. %>
+    <% candidates = Current.user.accessible_accounts.alphabetically.to_a %>
+    <% if candidates.any? %>
+      <% suggested = import.suggested_account(candidates) %>
+      <%= f.select :account_id, candidates.map { |a| [ a.name, a.id ] },
+                   { include_blank: t("imports.pdf_import.select_account_placeholder"), selected: import.account_id || suggested&.id, label: false },
+                   { "aria-labelledby": heading_id } %>
+      <% if import.account.nil? %>
+        <p class="text-xs text-secondary">
+          <%= suggested ? t("imports.pdf_import.select_account_suggested_hint", account: suggested.name) : t("imports.pdf_import.select_account_hint") %>
+        </p>
+      <% end %>
+    <% else %>
+      <p class="text-sm text-secondary px-3 py-2 bg-warning/10 rounded-lg">
+        <%= t("imports.pdf_import.no_accounts") %>
+      </p>
+      <%= render DS::Link.new(text: t("imports.pdf_import.create_account"), href: new_account_path(return_to: import_path(import)), variant: "primary", full_width: true, frame: :modal) %>
+    <% end %>
+    <% if candidates.any? %>
+      <%= f.submit t("imports.pdf_import.save_account") %>
+    <% end %>
+  <% end %>
+</div>
