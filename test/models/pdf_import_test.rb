@@ -129,6 +129,92 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_equal "Dividend", entry.entryable.investment_activity_label
   end
 
+  test "import! sets investment_contribution kind and dedicated category for contribution rows" do
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:investment)))
+    import.update!(document_type: "investment_statement")
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: Date.current.strftime(import.date_format),
+      amount: "500.00",
+      name: "401k Contribution",
+      category: "Contribution",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    entry = import.account.entries.find_by!(name: "401k Contribution")
+    transaction = entry.entryable
+    assert_equal "Contribution", transaction.investment_activity_label
+    assert_equal "investment_contribution", transaction.kind
+    assert_equal import.family.investment_contributions_category, transaction.category
+  end
+
+  test "import! backfills opening balance from the statement when nothing predates it" do
+    account = accounts(:depository)
+    period_start = 10.days.ago.to_date
+
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: account))
+    import.update!(
+      document_type: "bank_statement",
+      extracted_data: {
+        "opening_balance" => 1000.00,
+        "period" => { "start_date" => period_start.to_s }
+      }
+    )
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: (period_start + 1.day).strftime(import.date_format),
+      amount: "-20.00",
+      name: "Test Deposit",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    account.reload
+    assert account.has_opening_anchor?
+    assert_equal 1000.00, account.opening_anchor_balance.to_f
+    assert_equal period_start - 1.day, account.opening_anchor_date
+  end
+
+  test "import! does not backfill opening balance when earlier entries already exist" do
+    account = accounts(:depository)
+    # The fixture account already has entries from several days ago, so a
+    # statement period starting more recently than those must not backfill
+    # an opening anchor over real, earlier data.
+    period_start = Date.current
+
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: account))
+    import.update!(
+      document_type: "bank_statement",
+      extracted_data: {
+        "opening_balance" => 1000.00,
+        "period" => { "start_date" => period_start.to_s }
+      }
+    )
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: period_start.strftime(import.date_format),
+      amount: "-20.00",
+      name: "Test Deposit",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    assert_not account.reload.has_opening_anchor?
+  end
+
   test "import! leaves investment_activity_label nil on non-investment accounts" do
     import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:depository)))
     import.update!(document_type: "bank_statement")

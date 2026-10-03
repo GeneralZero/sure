@@ -127,9 +127,19 @@ class PdfImport < Import
           next
         end
 
+        label = investment_activity_label_for(row)
+
         Transaction.new(
-          category: mappings.categories.mappable_for(row.category),
-          investment_activity_label: investment_activity_label_for(row),
+          # A contribution is a transfer into the account, not a categorizable
+          # expense/income — the dedicated category and `investment_contribution`
+          # kind are what provider sync sets for the same label (see
+          # Account::ProviderImportAdapter#apply_entry), and what downstream
+          # budget/transfer accounting keys off. Without them a PDF-imported
+          # contribution reads as an ordinary transaction under whatever
+          # category the AI happened to extract.
+          category: label == "Contribution" ? account.family.investment_contributions_category : mappings.categories.mappable_for(row.category),
+          investment_activity_label: label,
+          kind: label == "Contribution" ? :investment_contribution : :standard,
           entry: Entry.new(
             account: account,
             date: row.date_iso,
@@ -150,6 +160,7 @@ class PdfImport < Import
 
       Transaction.import!(new_transactions, recursive: true) if new_transactions.any?
       reconcile_entries!(reconciled_now, at: reconciled_at)
+      backfill_opening_balance!
     end
   end
 
@@ -470,6 +481,40 @@ class PdfImport < Import
   end
 
   private
+
+    # A statement rarely covers the account's whole history -- it describes one
+    # period, and whatever came before it is simply absent from what was
+    # uploaded. Without an opening balance, every balance series/chart/return
+    # calculation treats the day before the account's oldest entry as an
+    # implicit $0 start, which is wrong whenever the real balance on that day
+    # was anything else -- exactly the gap a statement's own stated opening
+    # balance exists to fill (every extractor returns one; see e.g.
+    # Provider::Openai::BankStatementExtractor).
+    #
+    # Only backfills when nothing already describes the account's balance
+    # before this statement: an existing opening anchor, or any entry predating
+    # the period, means this statement is not the earliest evidence the account
+    # has, and overwriting that with a guess would silently discard real data.
+    # Best-effort and never raises -- a malformed or missing opening_balance/
+    # period on the extracted data leaves the account exactly as it was; the
+    # user can still set one by hand from the account settings.
+    def backfill_opening_balance!
+      return if account.has_opening_anchor?
+
+      opening_balance = extracted_data&.dig("opening_balance")
+      period_start_str = extracted_data&.dig("period", "start_date")
+      return if opening_balance.blank? || period_start_str.blank?
+
+      period_start = Date.parse(period_start_str.to_s)
+      return if account.entries.where("date < ?", period_start).exists?
+
+      Account::OpeningBalanceManager.new(account).set_opening_balance(
+        balance: opening_balance,
+        date: period_start - 1.day
+      )
+    rescue ArgumentError, TypeError
+      nil
+    end
 
     # Investment-statement rows carry the AI's own activity classification in
     # row.category (Dividend/Interest/Fee/Contribution/Withdrawal/Other —
