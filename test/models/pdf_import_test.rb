@@ -272,6 +272,57 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_equal "pending", import.reload.status
   end
 
+  test "display_phase reflects queued, ready for review, and nothing-to-import states" do
+    assert_equal :queued, @import.display_phase
+    assert_equal :ready_for_review, @import_with_rows.display_phase
+    assert_equal :complete, @processed_import.display_phase
+  end
+
+  test "display_phase distinguishes analyzing from publishing while importing" do
+    @import.update!(status: :importing)
+    assert_equal :analyzing, @import.display_phase
+
+    @import.update!(ai_summary: "Some AI summary")
+    assert_equal :publishing, @import.display_phase
+  end
+
+  test "display_phase flags a stalled record: AI finished but never advanced past pending" do
+    @import.update!(ai_summary: "Some AI summary", rows_count: 0)
+    assert_equal :stalled_after_processing, @import.display_phase
+  end
+
+  test "display_phase is imported once the import actually created entries" do
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:depository)))
+    import.update!(document_type: "bank_statement", status: :complete)
+
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: Date.current.strftime(import.date_format),
+      amount: "-5.50",
+      name: "Coffee Shop",
+      currency: "USD"
+    )
+    import.rows.reset
+    import.import!
+
+    assert_equal :imported, import.reload.display_phase
+  end
+
+  test "queued_behind_count counts other imports actively being analyzed" do
+    assert_equal 0, @import.queued_behind_count
+
+    other = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:depository)))
+    other.update!(status: :importing)
+
+    assert_equal 1, @import.queued_behind_count
+  end
+
+  test "queued_behind_count is zero outside the queued phase" do
+    @import_with_rows.update!(status: :importing)
+    assert_equal 0, @import_with_rows.queued_behind_count
+  end
+
   test "generate_rows_from_extracted_data creates import rows" do
     import = imports(:pdf_with_rows)
     import.rows.destroy_all

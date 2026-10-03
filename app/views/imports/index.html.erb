@@ -38,7 +38,16 @@
                 </span>
               </td>
               <td class="px-2 py-3">
-                <%= link_to import_path(import), class: "font-medium text-sm text-primary hover:underline" do %>
+                <%# For PdfImport, the underlying file's own name (e.g.
+                    "chase-checking-2024-01.pdf") - not the account/type label
+                    already shown, which is the same for every statement on
+                    the same account and gives no way to tell rows apart at a
+                    glance when several are in flight. Native title attribute
+                    (not a DS tooltip component) since this is a plain text
+                    hint on an existing link, not an interactive element. %>
+                <%= link_to import_path(import),
+                      class: "font-medium text-sm text-primary hover:underline",
+                      title: (import.pdf_filename if import.is_a?(PdfImport)) do %>
                   <% if import.account.present? %>
                     <%= import.account.name + " " %>
                   <% end %>
@@ -46,7 +55,41 @@
                 <% end %>
               </td>
               <td class="px-2 py-3">
-                <% if import.pending? %>
+                <%# PdfImport's own status enum is too coarse for this list -
+                    see PdfImport#display_phase for why "pending"/"importing"
+                    alone can't tell queued/analyzing/ready-for-review/
+                    publishing apart. Every other import type (CSV etc.)
+                    keeps the exact status-enum badge logic below untouched. %>
+                <% if import.is_a?(PdfImport) && import.display_phase == :queued %>
+                  <% behind = import.queued_behind_count %>
+                  <%= render "shared/badge" do %>
+                    <%= behind.positive? ? t("imports.table.row.status.pdf_queued_with_count", count: behind) : t("imports.table.row.status.pdf_queued") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :analyzing %>
+                  <%= render "shared/badge", color: "warning", pulse: true do %>
+                    <%= t("imports.table.row.status.pdf_analyzing") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :publishing %>
+                  <%= render "shared/badge", color: "warning", pulse: true do %>
+                    <%= t("imports.table.row.status.pdf_publishing") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :ready_for_review %>
+                  <%= render "shared/badge", color: "success" do %>
+                    <%= t("imports.table.row.status.pdf_ready_for_review") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :stalled_after_processing %>
+                  <%= render "shared/badge", color: "error" do %>
+                    <%= t("imports.table.row.status.pdf_stalled") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :imported %>
+                  <%= render "shared/badge", color: "success" do %>
+                    <%= t("imports.table.row.status.pdf_imported") %>
+                  <% end %>
+                <% elsif import.is_a?(PdfImport) && import.display_phase == :complete %>
+                  <%= render "shared/badge" do %>
+                    <%= t("imports.table.row.status.pdf_complete") %>
+                  <% end %>
+                <% elsif import.pending? %>
                   <%= render "shared/badge" do %>
                     <%= t("imports.table.row.status.in_progress") %>
                   <% end %>

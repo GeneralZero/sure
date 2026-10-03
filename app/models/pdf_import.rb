@@ -417,6 +417,56 @@ class PdfImport < Import
     already_recorded_count.positive?
   end
 
+  # The real `status` enum (pending/importing/complete/failed/...) is too
+  # coarse to show a user what is actually happening: `pending` means both
+  # "just uploaded, AI hasn't even started" and "AI is done, rows are ready
+  # for your review" (told apart today only by rows_count), and `importing`
+  # means both "AI is actively reading the PDF" and "you clicked Publish and
+  # your reviewed rows are being written to the ledger" - two completely
+  # different operations with nothing in the DB directly distinguishing them
+  # (only ai_processed? does, indirectly). This doesn't touch the real
+  # `status` column or enum (too much other logic - validations, the reaper,
+  # publishable?/revertable? - depends on its exact values); it only adds a
+  # read-only, purely-derived view of the same state for display.
+  #
+  # :imported vs :complete doesn't exist in the real enum either: it alone
+  # can't tell "I published this and it added transactions" apart from
+  # "there was nothing to publish" - both just land on :complete, which
+  # makes a statement still waiting on the user's review look no different
+  # at a glance from one that's actually finished.
+  def display_phase
+    return :ready_for_review if pending? && rows_count > 0
+    return :publishing if importing? && ai_processed?
+    return :analyzing if importing?
+    # ProcessPdfJob normally flips a zero-row, already-AI-processed record
+    # straight to :complete in the same run that set ai_processed - a record
+    # can only be seen sitting here if that final write never happened (job
+    # died between the two updates, or something else re-armed processing on
+    # an already-processed record without a job actually running). Showing
+    # this as :queued would claim AI hasn't looked at it yet, which is false.
+    return :stalled_after_processing if pending? && ai_processed? && rows_count.zero?
+    return :queued if pending?
+    # imported_count is entries this import itself created (already-matched/
+    # reconciled rows create no new Entry - see Import#data_committed? and
+    # #imported_count) - zero here means either a non-transaction document
+    # (contract, tax form, ...) or a statement where every row matched
+    # something already on file, not a failure.
+    return :imported if complete? && imported_count.positive?
+    return :complete if complete?
+
+    status.to_sym
+  end
+
+  # Only meaningful in :queued - how many other statements are ahead of this
+  # one. Reflects real contention regardless of ProcessPdfJob's one-at-a-time
+  # gate: Sidekiq can still only run so many of these against one local model
+  # at once before they start queueing for real.
+  def queued_behind_count
+    return 0 unless display_phase == :queued
+
+    PdfImport.where(status: :importing).where.not(id: id).count
+  end
+
   def send_next_steps_email(user)
     PdfImportMailer.with(
       user: user,

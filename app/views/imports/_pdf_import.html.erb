@@ -75,7 +75,25 @@
         <%= render DS::Link.new(text: t("imports.pdf_import.back_to_imports"), href: imports_path, variant: "secondary", full_width: true) %>
       </div>
 
-    <% elsif import.importing? || import.pending? %>
+    <% elsif import.display_phase == :queued %>
+      <div class="mx-auto bg-gray-tint-5 h-8 w-8 rounded-full flex items-center justify-center">
+        <%= icon "clock", class: "text-subdued" %>
+      </div>
+
+      <div class="text-center space-y-2">
+        <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.queued_title") %></h1>
+        <% behind = import.queued_behind_count %>
+        <p class="text-sm text-secondary">
+          <%= behind.positive? ? t("imports.pdf_import.queued_behind_description", count: behind) : t("imports.pdf_import.queued_description") %>
+        </p>
+      </div>
+
+      <div class="space-y-2 flex flex-col">
+        <%= render DS::Link.new(text: t("imports.pdf_import.check_status"), href: import_path(import), variant: "primary", full_width: true) %>
+        <%= render DS::Link.new(text: t("imports.pdf_import.back_to_dashboard"), href: root_path, variant: "secondary", full_width: true) %>
+      </div>
+
+    <% elsif import.display_phase == :analyzing %>
       <div class="mx-auto bg-gray-tint-5 h-8 w-8 rounded-full flex items-center justify-center">
         <%= icon "loader", class: "animate-pulse" %>
       </div>
@@ -83,6 +101,42 @@
       <div class="text-center space-y-2">
         <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.processing_title") %></h1>
         <p class="text-sm text-secondary"><%= t("imports.pdf_import.processing_description") %></p>
+      </div>
+
+      <div class="space-y-2 flex flex-col">
+        <%= render DS::Link.new(text: t("imports.pdf_import.check_status"), href: import_path(import), variant: "primary", full_width: true) %>
+        <%= render DS::Link.new(text: t("imports.pdf_import.back_to_dashboard"), href: root_path, variant: "secondary", full_width: true) %>
+      </div>
+
+    <% elsif import.display_phase == :stalled_after_processing %>
+      <div class="mx-auto bg-warning/10 h-8 w-8 rounded-full flex items-center justify-center">
+        <%= icon "alert-triangle", class: "text-warning" %>
+      </div>
+
+      <div class="text-center space-y-2">
+        <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.stalled_title") %></h1>
+        <p class="text-sm text-secondary"><%= t("imports.pdf_import.stalled_description") %></p>
+      </div>
+
+      <div class="space-y-2 flex flex-col">
+        <%= render DS::Button.new(
+              text: t("imports.pdf_import.delete_import"),
+              href: import_path(import),
+              method: :delete,
+              variant: :secondary,
+              full_width: true
+            ) %>
+        <%= render DS::Link.new(text: t("imports.pdf_import.back_to_imports"), href: imports_path, variant: "secondary", full_width: true) %>
+      </div>
+
+    <% elsif import.display_phase == :publishing %>
+      <div class="mx-auto bg-gray-tint-5 h-8 w-8 rounded-full flex items-center justify-center">
+        <%= icon "loader", class: "animate-pulse" %>
+      </div>
+
+      <div class="text-center space-y-2">
+        <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.publishing_title") %></h1>
+        <p class="text-sm text-secondary"><%= t("imports.pdf_import.publishing_description") %></p>
       </div>
 
       <div class="space-y-2 flex flex-col">
@@ -120,7 +174,14 @@
       </div>
 
       <div class="text-center space-y-2">
-        <h1 class="font-medium text-primary text-center text-3xl"><%= t("imports.pdf_import.complete_title") %></h1>
+        <%# display_phase splits the real :complete status into :imported (this
+            actually created transactions) vs :complete (nothing to import -
+            a non-transaction document, or every row already matched
+            something on file) - the title now says which one this is, not
+            just that AI processing finished. %>
+        <h1 class="font-medium text-primary text-center text-3xl">
+          <%= import.display_phase == :imported ? t("imports.pdf_import.imported_title") : t("imports.pdf_import.complete_title") %>
+        </h1>
         <%# A statement whose every line was already on file creates nothing, and
             the generic description reads as though the import did nothing at all. %>
         <% if import.imported_count.zero? && import.reconciled_anything? %>

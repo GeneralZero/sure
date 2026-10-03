@@ -414,6 +414,14 @@ en:
           revert_failed: Revert failed
           complete: Complete
           failed: Failed
+          pdf_queued: Queued
+          pdf_queued_with_count: "Queued (%{count} ahead)"
+          pdf_analyzing: Analyzing (AI)
+          pdf_publishing: Publishing
+          pdf_ready_for_review: Ready for review
+          pdf_stalled: Needs a nudge
+          pdf_imported: Imported
+          pdf_complete: Complete (nothing to import)
         actions:
           revert: Revert
           confirm_revert: This will delete transactions that were imported, but you will still be able to review and re-import your data at any time.
@@ -533,11 +541,21 @@ en:
       processing_description: We're analyzing your document using AI. This may take a moment. You'll receive an email when the analysis is complete.
       check_status: Check status
       back_to_dashboard: Back to dashboard
+      queued_title: Waiting to start
+      queued_behind_description:
+        one: "1 other statement is being analyzed first — yours will start automatically once it's free. Only one statement is analyzed at a time, so this can take a while."
+        other: "%{count} other statements are being analyzed first — yours will start automatically once it's free. Only one statement is analyzed at a time, so this can take a while."
+      queued_description: Your statement is queued and will begin processing shortly.
+      stalled_title: Needs a nudge
+      stalled_description: "AI already looked at this statement and found nothing left to import, but it never got marked finished. This is a bookkeeping gap, not a failed import — nothing was lost. Deleting and re-uploading is the simplest fix."
+      publishing_title: Importing your transactions
+      publishing_description: Your reviewed transactions are being written to your account now. This is usually quick.
+      imported_title: Imported
       failed_title: Processing failed
       failed_description: We were unable to process your PDF document. Please try again or contact support.
       try_again: Try again
       delete_import: Delete import
-      complete_title: Document analyzed
+      complete_title: Nothing to import
       complete_description: We've analyzed your PDF and here's what we found.
       document_type_label: Document Type
       source_statement: Source statement
