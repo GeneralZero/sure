@@ -89,6 +89,35 @@ class DepositoriesControllerTest < ActionDispatch::IntegrationTest
     assert linked_account.reload.enable_category_matcher?
   end
 
+  test "update applies a new opening balance anchor through the shared update action" do
+    account = accounts(:depository)
+    refute account.has_opening_anchor?
+    anchor_date = 5.years.ago.to_date
+
+    patch depository_path(account), params: {
+      account: { opening_balance_amount: "1234.56", opening_balance_date: anchor_date.to_s }
+    }
+
+    account.reload
+    assert account.has_opening_anchor?
+    assert_equal 1234.56, account.opening_anchor_balance.to_f
+    assert_equal anchor_date, account.opening_anchor_date
+  end
+
+  test "update corrects an existing opening balance anchor's amount and date" do
+    account = accounts(:depository)
+    account.set_opening_anchor_balance(balance: 100, date: 10.years.ago.to_date)
+    new_date = 8.years.ago.to_date
+
+    patch depository_path(account), params: {
+      account: { opening_balance_amount: "500.00", opening_balance_date: new_date.to_s }
+    }
+
+    account.reload
+    assert_equal 500.00, account.opening_anchor_balance.to_f
+    assert_equal new_date, account.opening_anchor_date
+  end
+
   test "edit form renders category matcher toggle only for accounts that support it" do
     get edit_account_url(accounts(:connected))
     assert_response :success

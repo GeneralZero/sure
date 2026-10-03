@@ -84,7 +84,7 @@ module AccountableResource
     # Assigning a balance can fail before the normal update path assigns the
     # other submitted fields. Keep them available for the 422 form without
     # persisting them.
-    update_params = account_params.except(:return_to, :balance, :opening_balance_date)
+    update_params = account_params.except(:return_to, :balance, :opening_balance_date, :opening_balance_amount)
     # An uploaded logo is meant to be seen, so it takes over from Brandfetch.
     update_params[:logo_selection] = "automatic" if account_params[:logo].present?
     @account.logo_chosen = logo_chosen?
@@ -98,6 +98,32 @@ module AccountableResource
       # Handle balance update if the value actually changed
       if account_params[:balance].present? && account_params[:balance].to_d != @account.balance
         result = @account.set_current_balance(account_params[:balance].to_d)
+        unless result.success?
+          @account.assign_attributes(update_params)
+          @error_message = result.error
+          raise ActiveRecord::Rollback
+        end
+      end
+
+      # The opening anchor itself (not :balance, which means "today's
+      # balance" once the account is persisted -- see the form's comment).
+      # Without this, an account's opening balance/date is only correctable
+      # by finding its auto-generated Valuation entry in the transactions
+      # list and editing it like a regular transaction -- including after
+      # backfilling older history, which otherwise leaves the anchor's date
+      # sitting in the middle of the timeline with no way to push it earlier.
+      opening_balance_amount = account_params[:opening_balance_amount].presence
+      opening_balance_date_param = account_params[:opening_balance_date].presence
+
+      if opening_balance_amount.present? || opening_balance_date_param.present?
+        resolved_date = begin
+          opening_balance_date_param&.to_date
+        rescue Date::Error
+          nil
+        end
+        resolved_balance = opening_balance_amount.present? ? opening_balance_amount.to_d : @account.opening_anchor_balance
+
+        result = @account.set_opening_anchor_balance(balance: resolved_balance, date: resolved_date)
         unless result.success?
           @account.assign_attributes(update_params)
           @error_message = result.error
@@ -198,7 +224,7 @@ module AccountableResource
     def account_params
       params.require(:account).permit(
         :name, :balance, :subtype, :currency, :accountable_type, :return_to,
-        :opening_balance_date,
+        :opening_balance_date, :opening_balance_amount,
         :institution_name, :institution_domain, :notes, :exclude_from_reports,
         :enable_category_matcher, :logo,
         accountable_attributes: self.class.permitted_accountable_attributes

@@ -71,6 +71,7 @@ en:
     form:
       balance: "Balance on date:"
       opening_balance_date_label: Opening balance date
+      opening_balance_amount_label: Opening balance
       name_label: Account name
       name_placeholder: Example account name
       additional_details: Additional details
