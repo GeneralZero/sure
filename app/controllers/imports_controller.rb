@@ -337,7 +337,11 @@ class ImportsController < ApplicationController
       ext = File.extname(filename).downcase
 
       if ext == ".pdf"
-        return [ false, filename ] unless Import::ALLOWED_PDF_MIME_TYPES.include?(file.content_type)
+        # Content-based only, matching create_document_import's single-file
+        # path: the browser/OS-reported content_type is frequently something
+        # other than "application/pdf" for a perfectly valid PDF (e.g.
+        # application/octet-stream), so gating on it here rejected real PDFs
+        # that the single-file path (no such gate) accepted immediately.
         return [ false, filename ] unless valid_pdf_file?(file)
         return [ false, filename ] unless AccountStatement.statement_manager?(Current.user)
 
