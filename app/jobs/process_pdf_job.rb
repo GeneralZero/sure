@@ -27,7 +27,12 @@ class ProcessPdfJob < ApplicationJob
     # reset_processing_claim below already reaps anything stuck past 30
     # minutes back to pending, which stops satisfying this gate on the very
     # next check.
-    if PdfImport.where(status: :importing).where.not(id: pdf_import.id).exists?
+    # A claim stuck past 30 minutes doesn't get reaped here (only
+    # reset_processing_claim below does that, and only for this job's own
+    # pdf_import) - without this staleness filter, any import left behind in
+    # `importing` by a killed/crashed worker blocks every other import's gate
+    # check forever, since none of them ever advances far enough to reap it.
+    if PdfImport.where(status: :importing).where.not(id: pdf_import.id).where("updated_at > ?", 30.minutes.ago).exists?
       self.class.set(wait: 5.minutes).perform_later(pdf_import)
       return
     end
