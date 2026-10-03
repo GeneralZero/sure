@@ -174,6 +174,12 @@ class PdfImport < Import
 
       previous_account_id = account_id
       update!(account: account)
+      # A statement with no extracted rows (e.g. an investment statement with
+      # no cash activity that period) never reaches import!, which is where
+      # this normally runs -- without it here too, picking an account for one
+      # of these never backfills the opening balance its own extracted data
+      # already has.
+      backfill_opening_balance!
 
       if (statement = account_statement)
         statement.lock!

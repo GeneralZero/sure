@@ -419,6 +419,29 @@ class PdfImportTest < ActiveSupport::TestCase
     assert statement.linked?
   end
 
+  test "assign_account! backfills opening balance even when nothing was extracted" do
+    account = accounts(:depository)
+    period_start = 10.days.ago.to_date
+
+    statement = create_pdf_statement(account: nil)
+    import = PdfImport.create_from_statement!(statement: statement)
+    import.update!(
+      document_type: "bank_statement",
+      extracted_data: {
+        "transactions" => [],
+        "opening_balance" => 500.00,
+        "period" => { "start_date" => period_start.to_s }
+      }
+    )
+
+    assert import.assign_account!(account)
+
+    account.reload
+    assert account.has_opening_anchor?
+    assert_equal 500.00, account.opening_anchor_balance.to_f
+    assert_equal period_start - 1.day, account.opening_anchor_date
+  end
+
   test "statement backed import requires pdf statement" do
     csv_statement = AccountStatement.create_from_upload!(
       family: @import.family,

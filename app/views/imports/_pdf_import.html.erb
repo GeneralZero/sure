@@ -178,6 +178,32 @@
             <%= import.ai_summary %>
           </p>
         </div>
+
+        <%# A statement that extracted no rows (e.g. an investment statement with
+            no cash activity that period) never passes through the pending-review
+            account picker above, but the statement's own opening/closing balance
+            is still useful once it's attached to an account (see
+            PdfImport#backfill_opening_balance!) -- offer the picker here too
+            rather than stranding that data on an unassigned, terminal import. %>
+        <% if import.account.nil? && import.statement_with_transactions? %>
+          <div class="space-y-2">
+            <h2 id="pdf-import-select-account-complete" class="font-medium text-primary"><%= t("imports.pdf_import.select_account") %></h2>
+            <%= styled_form_with model: import, scope: :import, url: import_path(import), method: :patch, class: "space-y-2" do |f| %>
+              <% accounts = Current.user.accessible_accounts.alphabetically.pluck(:name, :id) %>
+              <% if accounts.any? %>
+                <%= f.select :account_id, accounts,
+                             { include_blank: t("imports.pdf_import.select_account_placeholder"), label: false },
+                             { "aria-labelledby": "pdf-import-select-account-complete" } %>
+                <%= f.submit t("imports.pdf_import.save_account") %>
+              <% else %>
+                <p class="text-sm text-secondary px-3 py-2 bg-warning/10 rounded-lg">
+                  <%= t("imports.pdf_import.no_accounts") %>
+                </p>
+                <%= render DS::Link.new(text: t("imports.pdf_import.create_account"), href: new_account_path(return_to: import_path(import)), variant: "primary", full_width: true, frame: :modal) %>
+              <% end %>
+            <% end %>
+          </div>
+        <% end %>
       </div>
 
       <div class="text-center">
