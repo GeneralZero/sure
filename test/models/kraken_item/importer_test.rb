@@ -125,6 +125,25 @@ class KrakenItem::ImporterTest < ActiveSupport::TestCase
     assert_in_delta 50.0, account.current_balance, 0.01
   end
 
+  test "degrades gracefully when GetApiKeyInfo errors, rather than aborting before the balance fetch" do
+    @provider.stubs(:get_asset_info).returns(asset_metadata)
+    @provider.stubs(:get_extended_balance).returns(
+      "ZUSD" => { "balance" => "50.0", "credit" => "0", "credit_used" => "0", "hold_trade" => "0" }
+    )
+    # GetApiKeyInfo is the first call #import makes and is purely cosmetic
+    # metadata -- never read back into any balance or holdings math -- so a
+    # transient failure here must not prevent the balance fetch from ever
+    # running.
+    @provider.stubs(:get_api_key_info).raises(Provider::Kraken::RateLimitError, "Rate limit exceeded")
+
+    result = KrakenItem::Importer.new(@item, kraken_provider: @provider).import
+    assert result[:success]
+
+    account = @item.kraken_accounts.first
+    assert_in_delta 50.0, account.current_balance, 0.01
+    assert_nil account.raw_payload["api_key_info"]
+  end
+
   test "marks item requires_update when required endpoint reports permission error" do
     @provider.stubs(:get_asset_info).returns({})
     @provider.stubs(:get_asset_pairs).returns({})

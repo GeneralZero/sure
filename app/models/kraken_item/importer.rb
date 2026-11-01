@@ -14,7 +14,7 @@ class KrakenItem::Importer
   end
 
   def import
-    api_key_info = kraken_provider.get_api_key_info
+    api_key_info = fetch_api_key_info
 
     asset_metadata = kraken_provider.get_asset_info || {}
     pair_metadata = kraken_provider.get_asset_pairs || {}
@@ -50,6 +50,28 @@ class KrakenItem::Importer
   end
 
   private
+    # Purely informational (stored in raw_payload/raw_transactions_payload
+    # for display, never read back into any balance or holdings math), but
+    # it's the very first call #import makes -- a transient ApiError or
+    # RateLimitError here used to abort the entire sync before the balance
+    # fetch even ran. PermissionError/AuthenticationError still propagate:
+    # those mean the key itself is bad, which #import's own rescue (and
+    # KrakenItem::Syncer's) needs to see to mark requires_update.
+    def fetch_api_key_info
+      kraken_provider.get_api_key_info
+    rescue Provider::Kraken::ApiError, Provider::Kraken::RateLimitError => e
+      DebugLogEntry.capture(
+        category: "provider_sync_error",
+        level: "warn",
+        message: "API key info unavailable this sync (#{e.class.name.demodulize}); continuing without it: #{e.message}",
+        source: self.class.name,
+        provider_key: "kraken",
+        family: kraken_item.family,
+        metadata: { kraken_item_id: kraken_item.id }
+      )
+      nil
+    end
+
     def parse_assets(balances, asset_metadata)
       normalizer = KrakenAccount::AssetNormalizer.new(asset_metadata)
 
