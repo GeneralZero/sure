@@ -149,6 +149,20 @@ class KrakenItem::Importer
       end
 
       all_trades
+    rescue Provider::Kraken::PermissionError, Provider::Kraken::ApiError, Provider::Kraken::RateLimitError => e
+      # Trades aren't part of current_balance -- only the spot/Earn assets are
+      # -- so a transient failure here shouldn't take down a sync that already
+      # has a good balance. Degrade gracefully instead of aborting #import.
+      DebugLogEntry.capture(
+        category: "provider_sync_error",
+        level: "warn",
+        message: "Trades unavailable this sync (#{e.class.name.demodulize}); skipping trade import: #{e.message}",
+        source: self.class.name,
+        provider_key: "kraken",
+        family: kraken_item.family,
+        metadata: { kraken_item_id: kraken_item.id }
+      )
+      {}
     end
 
     def fetch_ledgers
@@ -181,12 +195,14 @@ class KrakenItem::Importer
       end
 
       all_ledgers
-    rescue Provider::Kraken::PermissionError => e
-      # Key may not have Query Ledger Entries permission; degrade gracefully.
+    rescue Provider::Kraken::PermissionError, Provider::Kraken::ApiError, Provider::Kraken::RateLimitError => e
+      # Permission denied, a transient API error, or a rate limit -- none of
+      # these should abort the whole sync over ledgers, which aren't part of
+      # current_balance. Degrade gracefully instead.
       DebugLogEntry.capture(
         category: "provider_sync_error",
         level: "warn",
-        message: "Ledgers permission denied; skipping ledger import: #{e.message}",
+        message: "Ledgers unavailable this sync (#{e.class.name.demodulize}); skipping ledger import: #{e.message}",
         source: self.class.name,
         provider_key: "kraken",
         family: kraken_item.family,

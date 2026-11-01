@@ -93,6 +93,38 @@ class KrakenItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 51, @item.kraken_accounts.first.raw_transactions_payload["trades"].size
   end
 
+  test "degrades gracefully when Trades is rate limited rather than aborting the whole sync" do
+    @provider.stubs(:get_asset_info).returns(asset_metadata)
+    @provider.stubs(:get_extended_balance).returns(
+      "ZUSD" => { "balance" => "50.0", "credit" => "0", "credit_used" => "0", "hold_trade" => "0" }
+    )
+    # Trades aren't part of current_balance, so a transient Trades-specific
+    # failure shouldn't take down a sync that already has a good balance.
+    @provider.stubs(:get_trades_history).raises(Provider::Kraken::RateLimitError, "Rate limit exceeded")
+
+    result = KrakenItem::Importer.new(@item, kraken_provider: @provider).import
+    assert result[:success]
+    assert_equal 0, result[:trades_imported]
+
+    account = @item.kraken_accounts.first
+    assert_in_delta 50.0, account.current_balance, 0.01
+  end
+
+  test "degrades gracefully when Ledgers returns an API error, not just a permission error" do
+    @provider.stubs(:get_asset_info).returns(asset_metadata)
+    @provider.stubs(:get_extended_balance).returns(
+      "ZUSD" => { "balance" => "50.0", "credit" => "0", "credit_used" => "0", "hold_trade" => "0" }
+    )
+    @provider.stubs(:get_ledgers).raises(Provider::Kraken::ApiError, "EGeneral:Internal error")
+
+    result = KrakenItem::Importer.new(@item, kraken_provider: @provider).import
+    assert result[:success]
+    assert_equal 0, result[:ledgers_imported]
+
+    account = @item.kraken_accounts.first
+    assert_in_delta 50.0, account.current_balance, 0.01
+  end
+
   test "marks item requires_update when required endpoint reports permission error" do
     @provider.stubs(:get_asset_info).returns({})
     @provider.stubs(:get_asset_pairs).returns({})
