@@ -59,6 +59,15 @@ class CoinbaseItem::Syncer
       account_ids = linked_accounts.map { |ca| ca.current_account&.id }.compact
       collect_transaction_stats(sync, account_ids: account_ids, source: "coinbase") if account_ids.any?
     end
+  rescue Provider::Coinbase::AuthenticationError => e
+    # Unlike KrakenItem::Syncer, this had no rescue at all: a revoked or
+    # expired API key reached Sync#perform's blanket rescue, which fails the
+    # sync but never flips coinbase_item to requires_update. The item looked
+    # "good," so every later scheduled sync retried the same dead credentials
+    # and failed again, with no reconnect prompt ever surfacing in the UI.
+    coinbase_item.update!(status: :requires_update)
+    mark_failed(sync, I18n.t("coinbase_item.syncer.credentials_invalid"))
+    raise e
   end
 
   # Hook called after sync completion. Currently a no-op.
