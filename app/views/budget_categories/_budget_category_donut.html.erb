@@ -4,7 +4,8 @@
   controller: "donut-chart",
   donut_chart_segments_value: budget_category.to_donut_segments_json,
   donut_chart_segment_height_value: 5,
-  donut_chart_segment_opacity_value: 0.2
+  donut_chart_segment_opacity_value: 0.2,
+  donut_chart_aria_label_value: t("charts.aria_labels.budget_category")
 }, class: "relative h-full" do %>
   <div data-donut-chart-target="chartContainer" class="absolute inset-0 pointer-events-none"></div>
 

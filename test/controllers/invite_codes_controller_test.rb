@@ -21,4 +21,16 @@ class InviteCodesControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to root_path
   end
+
+  test "deleting an invite code asks through the destructive themed confirm" do
+    sign_in users(:sure_support_staff)
+    InviteCode.generate!
+
+    get invite_codes_url
+
+    assert_response :success
+    confirm = JSON.parse(css_select("form[action^='/invite_codes/'] button").first["data-turbo-confirm"])
+    assert_equal "outline-destructive", confirm["variant"]
+    assert confirm["confirmText"].present?
+  end
 end

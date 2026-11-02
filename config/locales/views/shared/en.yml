@@ -4,6 +4,8 @@ en:
     self_hostable:
       redis_configured: "Redis is now configured properly! You can now setup your Sure application."
   shared:
+    copy: Copy
+    invalid_csv_file: Please upload a valid CSV file.
     preview: Preview
     dot_separator: "·"
     sync_toast:

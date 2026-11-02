@@ -20,6 +20,7 @@
             CSS variable and takes the whole chart down with it. %>
         <div class="relative h-40"
              data-controller="donut-chart"
+             data-donut-chart-aria-label-value="<%= t("charts.aria_labels.loan_repayment") %>"
              data-donut-chart-segments-value="<%= segments %>"
              data-donut-chart-overage-segment-id-value="paid">
           <div data-donut-chart-target="chartContainer" class="absolute inset-0 pointer-events-none"></div>

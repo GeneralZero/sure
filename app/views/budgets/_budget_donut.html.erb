@@ -1,6 +1,6 @@
 <%# locals: (budget:, editable:) %>
 
-<%= tag.div data: { controller: "donut-chart", donut_chart_segments_value: budget.to_donut_segments_json }, class: "relative h-full" do %>
+<%= tag.div data: { controller: "donut-chart", donut_chart_segments_value: budget.to_donut_segments_json, donut_chart_aria_label_value: t("charts.aria_labels.budget") }, class: "relative h-full" do %>
   <div data-donut-chart-target="chartContainer" class="absolute inset-0 pointer-events-none"></div>
 
   <div data-donut-chart-target="contentContainer" class="flex justify-center items-center h-full">

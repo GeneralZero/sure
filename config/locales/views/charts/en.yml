@@ -1,0 +1,16 @@
+---
+en:
+  charts:
+    aria_labels:
+      account_balance: Account balance over time
+      budget: Budget breakdown
+      budget_category: Budget category spending
+      cash_flow: Cash flow chart
+      example: Example chart
+      goal_progress: Goal progress
+      loan_repayment: Loan repayment progress
+      money_flow: Money flow chart
+      net_worth: Net worth over time
+      outflows: Spending breakdown
+      spending: Cumulative spending chart
+      trend: Trend

@@ -1,4 +1,5 @@
 <div data-controller="donut-chart"
+     data-donut-chart-aria-label-value="<%= t("charts.aria_labels.goal_progress") %>"
      data-donut-chart-segments-value="<%= goal.to_donut_segments_json.to_json %>"
      data-donut-chart-segment-height-value="6"
      role="progressbar"

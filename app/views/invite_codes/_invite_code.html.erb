@@ -5,7 +5,7 @@
       <span data-clipboard-target="source" class="text-inverse text-sm font-medium"><%= invite_code.token %></span>
     </div>
     <div class="flex items-center gap-2">
-      <button data-action="clipboard#copy" aria-label="Copy" class="shrink-0 z-10 inline-flex items-center px-1 text-sm text-secondary font-sm text-center" type="button">
+      <button data-action="clipboard#copy" aria-label="<%= t("shared.copy") %>" class="shrink-0 z-10 inline-flex items-center px-1 text-sm text-secondary font-sm text-center" type="button">
         <span data-clipboard-target="iconDefault">
           <%= icon "copy" %>
         </span>
@@ -13,15 +13,12 @@
           <%= icon "check" %>
         </span>
       </button>
-      <%# `data-confirm` is a rails-ujs attribute; this app replaces the
-          native confirm with a themed one via Turbo.config.forms.confirm
-          (see confirm_dialog_controller.js), which reads `turbo_confirm`
-          instead — rails-ujs isn't loaded at all, so this was a silent
-          no-op and the delete had no confirmation step whatsoever. %>
+      <%# Turbo's confirm (themed by confirm_dialog_controller.js) reads
+          `turbo_confirm`; rails-ujs's `data-confirm` is not loaded here. %>
       <%= button_to invite_code_path(invite_code),
             method: :delete,
             aria: { label: t(".delete") },
-            data: { turbo_confirm: CustomConfirm.for_resource_deletion("invite_code") },
+            data: { turbo_confirm: CustomConfirm.for_resource_deletion("invite_code").to_data_attribute },
             class: "ml-2 text-red-600 text-xs" do %>
         <%= icon("trash-2", size: "sm", class: "inline mr-1") %>
       <% end %>

@@ -2,6 +2,7 @@ import { Controller } from "@hotwired/stimulus"
 
 export default class extends Controller {
   static targets = ["input", "form", "overlay"]
+  static values = { invalidFileText: String }
 
   dragDepth = 0
 
@@ -65,7 +66,7 @@ export default class extends Controller {
 
     const message = document.createElement("p")
     message.className = "text-sm text-destructive mt-2"
-    message.textContent = "Please upload a valid CSV file."
+    message.textContent = this.invalidFileTextValue
     this.formTarget.prepend(message)
 
     this.invalidFileMessage = message

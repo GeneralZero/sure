@@ -1,6 +1,7 @@
 <%# locals: (sankey_data:, period:) %>
 <div
   data-controller="sankey-chart"
+  data-sankey-chart-aria-label-value="<%= t("charts.aria_labels.cash_flow") %>"
   data-sankey-chart-data-value="<%= sankey_data.to_json %>"
   data-sankey-chart-currency-symbol-value="<%= sankey_data[:currency_symbol] %>"
   data-sankey-chart-start-date-value="<%= period.start_date&.iso8601 %>"

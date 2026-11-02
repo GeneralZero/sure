@@ -83,6 +83,7 @@
 
       <div class="w-full h-44 privacy-sensitive"
         data-controller="bar-chart"
+        data-bar-chart-aria-label-value="<%= t("charts.aria_labels.money_flow") %>"
         data-bar-chart-data-value="<%= money_flow_data[:bars].to_json %>"
         data-bar-chart-currency-value="<%= Current.family.currency %>"
         data-bar-chart-income-label-value="<%= t(".income") %>"
