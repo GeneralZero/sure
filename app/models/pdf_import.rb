@@ -447,7 +447,10 @@ class PdfImport < Import
   def display_phase
     return :ready_for_review if pending? && rows_count > 0
     return :publishing if importing? && ai_processed?
-    return :analyzing if importing?
+    # Queued imports are `importing` too; only the one ProcessPdfJob is
+    # actually reading carries processing_started_at.
+    return :analyzing if importing? && processing_started_at.present?
+    return :queued if importing?
     # ProcessPdfJob normally flips a zero-row, already-AI-processed record
     # straight to :complete in the same run that set ai_processed - a record
     # can only be seen sitting here if that final write never happened (job
@@ -467,14 +470,14 @@ class PdfImport < Import
     status.to_sym
   end
 
-  # Only meaningful in :queued - how many other statements are ahead of this
-  # one. Reflects real contention regardless of ProcessPdfJob's one-at-a-time
-  # gate: Sidekiq can still only run so many of these against one local model
-  # at once before they start queueing for real.
+  # Only meaningful in :queued - how many of this family's statements were
+  # queued before this one and have not finished. Scoped to the family: the
+  # job gate is app-wide, but another family's uploads are not this one's
+  # business.
   def queued_behind_count
     return 0 unless display_phase == :queued
 
-    PdfImport.where(status: :importing).where.not(id: id).count
+    family.imports.where(type: "PdfImport", status: :importing).where("created_at < ?", created_at).count
   end
 
   def send_next_steps_email(user)

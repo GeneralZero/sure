@@ -86,6 +86,37 @@ class ProcessPdfJobTest < ActiveJob::TestCase
     assert_equal "complete", @import.reload.status
   end
 
+  test "waits its turn while another worker holds the processing lock, even though both are importing" do
+    attach_pdf!(@import)
+    @import.update!(status: :importing)
+    @import.expects(:process_with_ai).never
+
+    # A session of its own: the test's pinned connection would just re-enter
+    # the lock, since advisory locks are reentrant within one session.
+    config = ActiveRecord::Base.connection_db_config.configuration_hash
+    holder = PG.connect(host: config[:host], port: config[:port], user: config[:username], password: config[:password], dbname: config[:database])
+    begin
+      holder.exec_params("SELECT pg_advisory_lock($1)", [ ProcessPdfJob::PROCESSING_LOCK_KEY ])
+
+      assert_enqueued_with(job: ProcessPdfJob, args: [ @import ]) do
+        ProcessPdfJob.perform_now(@import)
+      end
+    ensure
+      holder.close
+    end
+  end
+
+  test "processing clears processing_started_at when it finishes" do
+    attach_pdf!(@import)
+    @import.expects(:process_with_ai).once.returns(Struct.new(:document_type).new("financial_document"))
+    @import.stubs(:send_next_steps_email)
+    @family.stubs(:upload_document).returns(family_documents(:tax_return))
+
+    ProcessPdfJob.perform_now(@import)
+
+    assert_nil @import.reload.processing_started_at
+  end
+
   test "uploads bank statement PDF to vector store with classified type metadata" do
     pdf_content = attach_pdf!(@import)
     process_result = Struct.new(:document_type).new("bank_statement")

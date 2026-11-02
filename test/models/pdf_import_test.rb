@@ -279,7 +279,7 @@ class PdfImportTest < ActiveSupport::TestCase
   end
 
   test "display_phase distinguishes analyzing from publishing while importing" do
-    @import.update!(status: :importing)
+    @import.update!(status: :importing, processing_started_at: Time.current)
     assert_equal :analyzing, @import.display_phase
 
     @import.update!(ai_summary: "Some AI summary")
@@ -309,11 +309,22 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_equal :imported, import.reload.display_phase
   end
 
-  test "queued_behind_count counts other imports actively being analyzed" do
+  test "display_phase is queued for an importing import the job has not started" do
+    @import.update!(status: :importing, processing_started_at: nil)
+
+    assert_equal :queued, @import.display_phase
+  end
+
+  test "queued_behind_count counts this family's unfinished imports queued earlier" do
+    @import.update!(status: :importing)
     assert_equal 0, @import.queued_behind_count
 
-    other = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:depository)))
-    other.update!(status: :importing)
+    earlier = @import.family.imports.create!(type: "PdfImport", status: :importing)
+    earlier.update_columns(status: "importing", created_at: @import.created_at - 1.minute)
+    later = @import.family.imports.create!(type: "PdfImport", status: :importing)
+    later.update_columns(status: "importing", created_at: @import.created_at + 1.minute)
+    elsewhere = families(:empty).imports.create!(type: "PdfImport", status: :importing)
+    elsewhere.update_columns(created_at: @import.created_at - 1.minute)
 
     assert_equal 1, @import.queued_behind_count
   end

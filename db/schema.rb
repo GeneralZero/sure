@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_31_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_02_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1392,6 +1392,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_31_120000) do
     t.string "notes_col_label"
     t.string "number_format"
     t.string "price_col_label"
+    t.datetime "processing_started_at"
     t.string "qty_col_label"
     t.string "raw_file_str"
     t.jsonb "readback_verification", default: {}, null: false

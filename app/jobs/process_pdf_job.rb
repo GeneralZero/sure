@@ -5,45 +5,44 @@ class ProcessPdfJob < ApplicationJob
     Rails.logger.error("[ProcessPdfJob] Discarded permanently (job_id=#{job.job_id}, error_class=#{err.class.name})")
   end
 
+  # Stable across deploys so old and new workers serialize on the same lock.
+  PROCESSING_LOCK_KEY = Digest::MD5.hexdigest("process_pdf_job").to_i(16) % (2**62)
+
   def perform(pdf_import)
     return unless pdf_import.is_a?(PdfImport)
-
-    # Sidekiq happily runs several of these concurrently, which is fine
-    # against a cloud API but pointless and actively harmful against a
-    # single local, CPU-bound model: concurrent requests to the same
-    # one-model server don't run in parallel, they just contend for the same
-    # compute and tie up multiple Sidekiq worker threads for hours at a
-    # stretch each, starving every other background job (syncs,
-    # categorization, etc.) in the meantime. This gate ensures at most one
-    # PdfImport processes at a time app-wide, regardless of whether the
-    # imports came from one bulk upload or scattered single uploads over
-    # time.
-    #
-    # Deliberately a fresh perform_later (not retry_job): retry_job counts
-    # against Sidekiq's retry-exhaustion limit, and a PDF waiting behind
-    # several slow ones could need dozens of checks before its turn - that's
-    # normal queueing, not a failing job, and must never land in the dead
-    # set for it. A stuck `importing` claim doesn't deadlock this either:
-    # reset_processing_claim below already reaps anything stuck past 30
-    # minutes back to pending, which stops satisfying this gate on the very
-    # next check.
-    # A claim stuck past 30 minutes doesn't get reaped here (only
-    # reset_processing_claim below does that, and only for this job's own
-    # pdf_import) - without this staleness filter, any import left behind in
-    # `importing` by a killed/crashed worker blocks every other import's gate
-    # check forever, since none of them ever advances far enough to reap it.
-    if PdfImport.where(status: :importing).where.not(id: pdf_import.id).where("updated_at > ?", 30.minutes.ago).exists?
-      self.class.set(wait: 5.minutes).perform_later(pdf_import)
-      return
-    end
 
     return reset_processing_claim(pdf_import) unless pdf_import.pdf_uploaded?
     return if pdf_import.status.in?(%w[complete failed])
     return reset_processing_claim(pdf_import) if pdf_import.ai_processed? && (!pdf_import.statement_with_transactions? || pdf_import.rows_count > 0)
 
-    pdf_import.update!(status: :importing)
+    # One import at a time, app-wide: a single local, CPU-bound model gains
+    # nothing from concurrent requests and ties up a worker thread per job for
+    # hours. Every queued import is already `importing`, so the gate is a
+    # session advisory lock rather than a status check, which Postgres also
+    # releases if the worker dies. A fresh perform_later (not retry_job) so
+    # waiting behind a slow statement never counts toward retry exhaustion.
+    acquired = with_processing_lock { process(pdf_import) }
+    self.class.set(wait: 1.minute).perform_later(pdf_import) unless acquired
+  end
 
-    begin
+  private
+
+    def with_processing_lock
+      connection = ActiveRecord::Base.connection
+      acquired = connection.select_value(ActiveRecord::Base.sanitize_sql_array([ "SELECT pg_try_advisory_lock(?)", PROCESSING_LOCK_KEY ]))
+      return false unless acquired
+
+      begin
+        yield
+      ensure
+        connection.execute(ActiveRecord::Base.sanitize_sql_array([ "SELECT pg_advisory_unlock(?)", PROCESSING_LOCK_KEY ]))
+      end
+      true
+    end
+
+    def process(pdf_import)
+      pdf_import.update!(status: :importing, processing_started_at: Time.current)
+
       process_result = pdf_import.process_with_ai
       document_type = resolve_document_type(pdf_import, process_result)
       upload_to_vector_store(pdf_import, document_type: document_type)
@@ -69,20 +68,17 @@ class ProcessPdfJob < ApplicationJob
       # Statements with extracted rows go to pending for user review/publish
       # Other document types are marked complete (no further action needed)
       final_status = statement_with_transactions?(document_type) && pdf_import.rows_count > 0 ? :pending : :complete
-      pdf_import.update!(status: final_status)
+      pdf_import.update!(status: final_status, processing_started_at: nil)
     rescue StandardError => e
       sanitized_error = sanitize_error_message(e)
       Rails.logger.error("PDF processing failed for import #{pdf_import.id}: #{e.class.name} - #{sanitized_error}")
       begin
-        pdf_import.update!(status: :failed, error: sanitized_error)
+        pdf_import.update!(status: :failed, error: sanitized_error, processing_started_at: nil)
       rescue StandardError => update_error
         Rails.logger.error("Failed to update import status: #{update_error.message}")
       end
       raise
     end
-  end
-
-  private
 
     def sanitize_error_message(error)
       case error
@@ -120,6 +116,6 @@ class ProcessPdfJob < ApplicationJob
     end
 
     def reset_processing_claim(pdf_import)
-      pdf_import.with_lock { pdf_import.update!(status: :pending) if pdf_import.importing? && pdf_import.updated_at <= 30.minutes.ago }
+      pdf_import.with_lock { pdf_import.update!(status: :pending, processing_started_at: nil) if pdf_import.importing? && pdf_import.updated_at <= 30.minutes.ago }
     end
 end
