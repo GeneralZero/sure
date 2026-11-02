@@ -46,9 +46,16 @@ class Balance::LinkedInvestmentSeriesNormalizer
         account_ids = Array(account_ids).compact
         return if account_ids.empty?
 
+        # "Supported" activity is either synced live from the provider (source
+        # present) OR locked in by a statement import (import_locked) -- a PDF
+        # statement for a linked account is just as reliable evidence as the
+        # live sync, and excluding it meant a linked investment account's
+        # chart hid its entire PDF-imported history, however far back it
+        # actually goes, behind whatever date the live sync happens to start
+        # from.
         activity_dates = Entry.where(account_id: account_ids)
           .excluding_pending
-          .where.not(source: nil)
+          .where("entries.source IS NOT NULL OR entries.import_locked = TRUE")
           .where.not(entryable_type: "Valuation")
           .group(:account_id)
           .minimum(:date)
@@ -181,10 +188,12 @@ class Balance::LinkedInvestmentSeriesNormalizer
         active_points.first&.value == series.values.first&.value
     end
 
+    # See the class-level common_supported_history_start_date for why
+    # import_locked counts as supported alongside a live provider source.
     def first_provider_activity_date
       @first_provider_activity_date ||= account.entries
         .excluding_pending
-        .where.not(source: nil)
+        .where("entries.source IS NOT NULL OR entries.import_locked = TRUE")
         .where.not(entryable_type: "Valuation")
         .minimum(:date)
     end
