@@ -113,7 +113,10 @@ module AccountableResource
       # The opening anchor itself (not :balance, which means "today's
       # balance" once the account is persisted -- see the form's comment).
       if opening_anchor_change
-        result = @account.set_opening_anchor_balance(**opening_anchor_change)
+        # A date-only change keeps the anchor's balance as it stands now, after
+        # set_current_balance may have moved it, not as the form loaded it.
+        balance = opening_anchor_change.fetch(:balance) { Account::OpeningBalanceManager.new(@account).opening_balance }
+        result = @account.set_opening_anchor_balance(balance: balance, date: opening_anchor_change[:date])
         unless result.success?
           @account.assign_attributes(update_params)
           @error_message = result.error
@@ -227,7 +230,7 @@ module AccountableResource
       date_changed = date && date != @account.opening_anchor_date
       return unless amount_changed || date_changed
 
-      { balance: amount || @account.opening_anchor_balance, date: (date if date_changed) }.compact
+      { balance: (amount if amount_changed), date: (date if date_changed) }.compact
     end
 
     def account_params
