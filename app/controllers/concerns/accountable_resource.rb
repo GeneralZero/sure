@@ -94,6 +94,11 @@ module AccountableResource
     # account's cached balance; before this, a validation failing on the
     # attributes (a half-filled loan rate change, say) returned 422 with the
     # balance half of the rejected form already committed.
+    # Read before set_current_balance moves the anchor: the form submits both
+    # fields pre-filled, so only what the user changed from the loaded anchor
+    # is applied, and re-applying the loaded value cannot undo that delta.
+    opening_anchor_change = changed_opening_anchor
+
     saved = Account.transaction do
       # Handle balance update if the value actually changed
       if account_params[:balance].present? && account_params[:balance].to_d != @account.balance
@@ -107,23 +112,8 @@ module AccountableResource
 
       # The opening anchor itself (not :balance, which means "today's
       # balance" once the account is persisted -- see the form's comment).
-      # Without this, an account's opening balance/date is only correctable
-      # by finding its auto-generated Valuation entry in the transactions
-      # list and editing it like a regular transaction -- including after
-      # backfilling older history, which otherwise leaves the anchor's date
-      # sitting in the middle of the timeline with no way to push it earlier.
-      opening_balance_amount = account_params[:opening_balance_amount].presence
-      opening_balance_date_param = account_params[:opening_balance_date].presence
-
-      if opening_balance_amount.present? || opening_balance_date_param.present?
-        resolved_date = begin
-          opening_balance_date_param&.to_date
-        rescue Date::Error
-          nil
-        end
-        resolved_balance = opening_balance_amount.present? ? opening_balance_amount.to_d : @account.opening_anchor_balance
-
-        result = @account.set_opening_anchor_balance(balance: resolved_balance, date: resolved_date)
+      if opening_anchor_change
+        result = @account.set_opening_anchor_balance(**opening_anchor_change)
         unless result.success?
           @account.assign_attributes(update_params)
           @error_message = result.error
@@ -219,6 +209,25 @@ module AccountableResource
     def set_manageable_account
       @account = Current.user.accessible_accounts.find(params[:id])
       require_account_permission!(@account)
+    end
+
+    # The submitted opening balance and date, or nil when neither differs from
+    # the account's current anchor.
+    def changed_opening_anchor
+      return unless @account.has_opening_anchor?
+
+      amount = account_params[:opening_balance_amount].presence&.to_d
+      date = begin
+        account_params[:opening_balance_date].presence&.to_date
+      rescue Date::Error
+        nil
+      end
+
+      amount_changed = amount && amount != @account.opening_anchor_balance
+      date_changed = date && date != @account.opening_anchor_date
+      return unless amount_changed || date_changed
+
+      { balance: amount || @account.opening_anchor_balance, date: (date if date_changed) }.compact
     end
 
     def account_params

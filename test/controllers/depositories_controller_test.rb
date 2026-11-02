@@ -89,19 +89,49 @@ class DepositoriesControllerTest < ActionDispatch::IntegrationTest
     assert linked_account.reload.enable_category_matcher?
   end
 
-  test "update applies a new opening balance anchor through the shared update action" do
+  test "update leaves the opening anchor alone when its pre-filled fields come back unchanged" do
     account = accounts(:depository)
-    refute account.has_opening_anchor?
-    anchor_date = 5.years.ago.to_date
+    account.set_opening_anchor_balance(balance: 100, date: 10.years.ago.to_date)
+    account.reload
+
+    # The form always submits both fields; re-applying them would reset the
+    # anchor that set_current_balance just moved.
+    Account.any_instance.expects(:set_opening_anchor_balance).never
 
     patch depository_path(account), params: {
-      account: { opening_balance_amount: "1234.56", opening_balance_date: anchor_date.to_s }
+      account: {
+        name: "Renamed",
+        balance: (account.balance + 500).to_s,
+        opening_balance_amount: account.opening_anchor_balance.to_s,
+        opening_balance_date: account.opening_anchor_date.to_s
+      }
+    }
+
+    assert_equal "Renamed", account.reload.name
+  end
+
+  test "the edit form offers the opening anchor in the account's currency, without a second currency picker" do
+    account = accounts(:depository)
+    account.set_opening_anchor_balance(balance: 100, date: 10.years.ago.to_date)
+
+    get edit_depository_url(account)
+
+    assert_response :success
+    assert_select "input[name='account[opening_balance_amount]']", count: 1
+    assert_select "select[name='account[currency]']:not([disabled])", count: 1
+  end
+
+  test "update does not create an opening anchor for an account without one" do
+    account = accounts(:depository)
+    refute account.has_opening_anchor?
+
+    patch depository_path(account), params: {
+      account: { name: "Renamed", opening_balance_amount: "1234.56", opening_balance_date: 5.years.ago.to_date.to_s }
     }
 
     account.reload
-    assert account.has_opening_anchor?
-    assert_equal 1234.56, account.opening_anchor_balance.to_f
-    assert_equal anchor_date, account.opening_anchor_date
+    assert_equal "Renamed", account.name
+    refute account.has_opening_anchor?
   end
 
   test "update corrects an existing opening balance anchor's amount and date" do

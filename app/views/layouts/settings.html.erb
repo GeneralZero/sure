@@ -9,13 +9,10 @@
       </div>
     </div>
 
-    <%# The scroll container spans the full width of <main> (not just the
-        centered max-w-4xl column below it) - on a wide viewport, <main> has
-        no overflow handling of its own, so the empty gutter beside the
-        centered column used to belong to <main> itself. Hovering there
-        silently ate the scroll wheel instead of scrolling the page: body/
-        html never scroll either (see _htmldoc.html.erb), so there was no
-        fallback once a wheel event missed this element. %>
+    <%# The scroll container spans the full width of <main>, not just the
+        centered column inside it: neither <main> nor body/html scroll (see
+        _htmldoc.html.erb), so a wheel event over the gutter beside the
+        column must still land on this element to scroll the page. %>
     <main id="main" class="grow flex h-full" data-notification-tray-target="main">
       <div data-controller="settings-scroll" class="grow flex flex-col w-full h-full overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
         <div class="relative max-w-4xl mx-auto flex flex-col w-full">
