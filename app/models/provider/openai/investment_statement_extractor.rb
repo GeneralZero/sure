@@ -44,7 +44,9 @@ class Provider::Openai::InvestmentStatementExtractor
       # no account context, and a second account's activity ends up tagged as
       # the first account's with nothing downstream able to tell them apart.
       result = process_chunk(chunk, index == 0)
-      chunk_account_number = result[:account_number]
+      # A page that does not repeat the account header continues the section
+      # before it, so it keeps that section's number rather than none.
+      chunk_account_number = result[:account_number].presence || account_numbers.last
       account_numbers << chunk_account_number if chunk_account_number.present?
 
       if chunk_account_number.present?
