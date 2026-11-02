@@ -78,6 +78,9 @@ class ImportsController < ApplicationController
 
   def create
     file_param = import_params[:import_file]
+    # A multiple file field also submits a hidden blank value, so a lone
+    # selection would otherwise arrive as ["", file] and take the bulk path.
+    file_param = file_param.compact_blank if file_param.is_a?(Array)
 
     # The document-upload file picker allows selecting several PDFs/files at
     # once (see app/views/imports/new.html.erb's file_field multiple: true),
@@ -320,8 +323,8 @@ class ImportsController < ApplicationController
       succeeded = results.count { |ok, _| ok }
       failures = results.reject { |ok, _| ok }.map { |_, name| name }
 
-      notice = succeeded.positive? ? t("imports.create.pdf_processing", default: "Files uploaded, processing started") : nil
-      alert = failures.any? ? "Could not process: #{failures.join(', ')}" : nil
+      notice = succeeded.positive? ? t("imports.create.bulk_uploaded", count: succeeded) : nil
+      alert = failures.any? ? t("imports.create.bulk_failed", files: failures.to_sentence) : nil
 
       redirect_to imports_path, notice: notice, alert: alert
     end

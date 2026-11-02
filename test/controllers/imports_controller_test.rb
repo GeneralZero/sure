@@ -204,6 +204,44 @@ class ImportsControllerTest < ActionDispatch::IntegrationTest
     assert_equal I18n.t("imports.create.pdf_processing"), flash[:notice]
   end
 
+  test "a single file from the multiple picker, with its hidden blank value, takes the single-file path" do
+    adapter = mock("vector_store_adapter")
+    adapter.stubs(:supported_extensions).returns(%w[.pdf .txt])
+    VectorStore::Registry.stubs(:adapter).returns(adapter)
+
+    assert_difference "Import.count", 1 do
+      post imports_url, params: {
+        import: {
+          type: "DocumentImport",
+          import_file: [ "", file_fixture_upload("imports/sample_bank_statement.pdf", "application/pdf") ]
+        }
+      }
+    end
+
+    assert_redirected_to import_url(Import.order(:created_at).last)
+    assert_nil flash[:alert]
+  end
+
+  test "a bulk upload reports what it uploaded and what it could not, translated" do
+    adapter = mock("vector_store_adapter")
+    adapter.stubs(:supported_extensions).returns(%w[.pdf .txt])
+    VectorStore::Registry.stubs(:adapter).returns(adapter)
+
+    post imports_url, params: {
+      import: {
+        type: "DocumentImport",
+        import_file: [
+          file_fixture_upload("imports/sample_bank_statement.pdf", "application/pdf"),
+          file_fixture_upload("imports/valid.csv", "application/pdf")
+        ]
+      }
+    }
+
+    assert_redirected_to imports_url
+    assert_equal I18n.t("imports.create.bulk_uploaded", count: 1), flash[:notice]
+    assert_equal I18n.t("imports.create.bulk_failed", files: "valid.csv"), flash[:alert]
+  end
+
   test "uploads pdf import through account statement" do
     assert_difference "AccountStatement.count", 1 do
       assert_difference "Import.where(type: 'PdfImport').count", 1 do
