@@ -119,6 +119,7 @@ en:
       title: What would you like to add?
     show:
       limited_fx_history_warning: "Exchange rate history is only available from %{date} onwards. Transactions before this date use approximate currency conversions — this can happen when the FX provider only offers a limited historical window."
+      opening_anchor_after_history_warning: "This account's starting balance is set on %{date}, but real transaction history begins before that date. Balances shown before the starting balance date may be incorrect — consider moving the starting balance to the actual beginning of this account's history."
       tabs:
         activity: Activity
         extra_repayments: Extra repayments

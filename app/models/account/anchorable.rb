@@ -54,6 +54,32 @@ module Account::Anchorable
     result
   end
 
+  # True when real activity (a Transaction or Trade, not a Valuation) exists
+  # before the opening anchor's own date -- the anchor is then sitting in the
+  # middle of the account's history rather than before the start of it, so
+  # the reverse calculator pins the balance there and runs every earlier
+  # day's flows backward from a date that isn't actually the earliest
+  # evidence the account has. #ensure_opening_anchor_precedes_entries already
+  # fixes this automatically, but only for a zero-balance anchor (a brand new
+  # account's bootstrap default) -- a NON-zero anchor is read elsewhere as
+  # "somebody entered this deliberately, on this day" and never
+  # auto-adjusted, which is exactly the case this surfaces instead: a
+  # non-zero anchor that still predates real history it didn't know about
+  # yet (e.g. a bulk historical statement import that landed after the
+  # anchor was already set).
+  def opening_anchor_after_history_start?
+    return false unless has_opening_anchor?
+
+    anchor_entry_id = valuations.opening_anchor.first&.entry&.id
+    oldest_real_entry_date = entries
+      .where.not(id: anchor_entry_id)
+      .where.not(entryable_type: "Valuation")
+      .excluding_pending
+      .minimum(:date)
+
+    oldest_real_entry_date.present? && opening_anchor_date > oldest_real_entry_date
+  end
+
   def history_start_date
     if linked? && balance_type == :investment
       Balance::LinkedInvestmentSeriesNormalizer.supported_history_start_date(self)

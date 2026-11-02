@@ -90,6 +90,17 @@ class UI::AccountPage < ApplicationComponent
     @fx_coverage_start_date = result
   end
 
+  # The account's real transaction/trade history starting before its opening
+  # anchor's own date means the anchor sits in the middle of history instead
+  # of before it -- see Account::Anchorable#opening_anchor_after_history_start?
+  # for why that breaks the balance calculation. Surfaced so an account set
+  # up with the wrong anchor date (e.g. a bulk historical import that landed
+  # after the anchor was already set) is caught here instead of only by
+  # noticing implausible balances in the chart.
+  def opening_anchor_warning?
+    account.opening_anchor_after_history_start?
+  end
+
   # The controller's projection when it built one; otherwise built here, once
   # per render, for callers that construct the page without it.
   def loan_projection
