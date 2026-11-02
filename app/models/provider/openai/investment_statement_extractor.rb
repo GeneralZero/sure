@@ -43,7 +43,7 @@ class Provider::Openai::InvestmentStatementExtractor
       # without re-asking here, every chunk after the first silently inherits
       # no account context, and a second account's activity ends up tagged as
       # the first account's with nothing downstream able to tell them apart.
-      result = process_chunk(chunk, index == 0)
+      result = process_chunk(chunk)
       # A page that does not repeat the account header continues the section
       # before it, so it keeps that section's number rather than none.
       chunk_account_number = result[:account_number].presence || account_numbers.last
@@ -85,12 +85,19 @@ class Provider::Openai::InvestmentStatementExtractor
       end
     end
 
+    # Pages before the first account header belong to the first account.
+    if (first_account_number = account_numbers.first)
+      all_transactions.each { |t| t[:account_number] = first_account_number if t[:account_number].blank? }
+    end
+
     {
       transactions: deduplicate_transactions(all_transactions),
       period: metadata[:period] || {},
       account_holder: metadata[:account_holder],
       account_number: metadata[:account_number],
-      account_numbers: account_numbers.uniq,
+      # Rows carry their own number too, so an account whose section never
+      # restated it in a header is still counted.
+      account_numbers: (account_numbers + all_transactions.filter_map { |t| t[:account_number].presence }).uniq,
       accounts: accounts_meta.map { |number, meta| meta.merge(account_number: number) },
       bank_name: metadata[:bank_name],
       opening_balance: metadata[:opening_balance],
@@ -138,11 +145,11 @@ class Provider::Openai::InvestmentStatementExtractor
       chunks
     end
 
-    def process_chunk(text, is_first_chunk)
+    def process_chunk(text)
       params = {
         model: model,
         messages: [
-          { role: "system", content: is_first_chunk ? instructions_with_metadata : instructions_transactions_only },
+          { role: "system", content: instructions_with_metadata },
           { role: "user", content: "Extract cash activity:\n\n#{text}" }
         ],
         response_format: { type: "json_object" }
@@ -264,25 +271,6 @@ class Provider::Openai::InvestmentStatementExtractor
         to the account whose section it actually appears in.
 
         Rules: Negative amounts for money leaving the account, positive for money arriving. Dates as YYYY-MM-DD. Include the security/fund name in "security" when the activity is tied to one (e.g. a dividend from a specific fund), otherwise null. If genuinely no cash activity exists in this statement, return an empty transactions array — do not invent rows. JSON only, no markdown.
-      INSTRUCTIONS
-    end
-
-    def instructions_transactions_only
-      <<~INSTRUCTIONS.strip
-        Extract CASH activity from investment/brokerage statement text as JSON. Return:
-        {"transactions":[{"date":"YYYY-MM-DD","description":"...","amount":-0.00,"activity_type":"Dividend|Interest|Fee|Contribution|Withdrawal|Other","security":"ticker or fund name, or null","account_number":"last 4 digits, or null"}]}
-
-        ONLY extract activity that moves cash in or out of the account (dividends, interest, fees, contributions, withdrawals) — never buy/sell trades, holdings, balance summaries, or an in-kind securities transfer (those move a security, not cash, and have $0 cash impact).
-
-        #{duplicate_event_rule}
-
-        This text is one chunk of a larger statement. Some statements combine multiple accounts (e.g. a
-        brokerage, an HSA, and a 401k from the same provider) in one document, each with its own activity
-        section — if this chunk covers a different account than earlier chunks, set each transaction's own
-        "account_number" to the account whose section it actually appears in; null or omit it for an
-        ordinary single-account statement.
-
-        Negative amounts for money leaving the account, positive for money arriving. Dates as YYYY-MM-DD. If genuinely no cash activity exists, return an empty transactions array. JSON only, no markdown.
       INSTRUCTIONS
     end
 

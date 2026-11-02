@@ -91,6 +91,11 @@ class Provider::Openai::BankStatementExtractor
       end
     end
 
+    # Pages before the first account header belong to the first account.
+    if (first_account_number = account_numbers.first)
+      all_transactions.each { |t| t[:account_number] = first_account_number if t[:account_number].blank? }
+    end
+
     {
       transactions: deduplicate_transactions(all_transactions),
       period: metadata[:period] || {},
