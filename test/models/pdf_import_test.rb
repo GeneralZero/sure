@@ -545,6 +545,94 @@ class PdfImportTest < ActiveSupport::TestCase
     assert_equal period_start - 1.day, account.opening_anchor_date
   end
 
+  test "a combined statement keeps only this account's rows, however the number was written" do
+    account = accounts(:depository)
+    account.update!(name: "Checking (6654)")
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: account))
+    import.update!(extracted_data: {
+      "account_numbers" => [ "6654", "XXXX1111" ],
+      "transactions" => [
+        { "name" => "Page one", "account_number" => "6654" },
+        { "name" => "Page two", "account_number" => "XXXX6654" },
+        { "name" => "Savings", "account_number" => "****1111" }
+      ]
+    })
+
+    assert_equal [ "Page one", "Page two" ], import.extracted_transactions.map { |t| t["name"] }
+  end
+
+  test "a transfer naming its own account as the counterparty moves to the other account" do
+    account = accounts(:depository)
+    account.update!(name: "Checking (6654)")
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: account))
+    import.update!(extracted_data: {
+      "account_numbers" => [ "6654", "1111" ],
+      "transactions" => [
+        { "name" => "Funds transfer from Checking XXXXXX6654", "account_number" => "6654", "transfer_counterparty_account_number" => "XXXXXX6654" },
+        { "name" => "Coffee", "account_number" => "6654" }
+      ]
+    })
+
+    assert_equal [ "Coffee" ], import.extracted_transactions.map { |t| t["name"] }
+  end
+
+  test "a combined statement does not hand this account another account's opening balance" do
+    account = accounts(:depository)
+    account.update!(name: "Checking (6654)")
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: nil))
+    import.update!(
+      document_type: "bank_statement",
+      extracted_data: {
+        "transactions" => [],
+        "account_numbers" => [ "1111", "6654" ],
+        "accounts" => [ { "account_number" => "1111", "opening_balance" => 9000, "period_start" => 10.days.ago.to_date.to_s } ],
+        "opening_balance" => 9000,
+        "period" => { "start_date" => 10.days.ago.to_date.to_s }
+      }
+    )
+
+    assert import.assign_account!(account)
+
+    assert_not Account.find(account.id).has_opening_anchor?
+  end
+
+  test "assign_account! leaves the opening anchor to publishing when there are rows to publish" do
+    account = accounts(:depository)
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: nil))
+    import.update!(
+      document_type: "bank_statement",
+      extracted_data: {
+        "transactions" => [ { "date" => Date.current.to_s, "amount" => "-5.00", "name" => "Coffee" } ],
+        "opening_balance" => 500.00,
+        "period" => { "start_date" => 10.days.ago.to_date.to_s }
+      }
+    )
+
+    assert import.assign_account!(account)
+
+    assert_not Account.find(account.id).has_opening_anchor?
+  end
+
+  test "import! records a sweep on an investment statement as an internal movement" do
+    import = PdfImport.create_from_statement!(statement: create_pdf_statement(account: accounts(:investment)))
+    import.update!(document_type: "investment_statement")
+    Import::Row.create!(
+      import: import,
+      source_row_number: 1,
+      date: Date.current.strftime(import.date_format),
+      amount: "250.00",
+      name: "Cash sweep",
+      category: "Sweep In",
+      currency: "USD"
+    )
+    import.rows.reset
+
+    import.import!
+
+    transaction = import.account.entries.find_by!(name: "Cash sweep").entryable
+    assert_equal "funds_movement", transaction.kind
+  end
+
   test "statement backed import requires pdf statement" do
     csv_statement = AccountStatement.create_from_upload!(
       family: @import.family,

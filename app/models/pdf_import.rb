@@ -120,6 +120,8 @@ class PdfImport < Import
       reconciled_now = []
       reconciled_at = Time.current
 
+      contributions_category = nil
+
       new_transactions = rows.filter_map do |row|
         if (existing = already_recorded_entry(adapter, row, claimed))
           claimed << existing.id
@@ -128,18 +130,23 @@ class PdfImport < Import
         end
 
         label = investment_activity_label_for(row)
+        # The same label-to-kind rule provider sync applies (see
+        # Account::ProviderImportAdapter): a contribution is a transfer into the
+        # account under its dedicated category, and a transfer or sweep is an
+        # internal movement, so neither reads as income or expense.
+        contribution = label == "Contribution"
+        contributions_category ||= account.family.investment_contributions_category if contribution
 
         Transaction.new(
-          # A contribution is a transfer into the account, not a categorizable
-          # expense/income — the dedicated category and `investment_contribution`
-          # kind are what provider sync sets for the same label (see
-          # Account::ProviderImportAdapter#apply_entry), and what downstream
-          # budget/transfer accounting keys off. Without them a PDF-imported
-          # contribution reads as an ordinary transaction under whatever
-          # category the AI happened to extract.
-          category: label == "Contribution" ? account.family.investment_contributions_category : mappings.categories.mappable_for(row.category),
+          category: contribution ? contributions_category : mappings.categories.mappable_for(row.category),
           investment_activity_label: label,
-          kind: label == "Contribution" ? :investment_contribution : :standard,
+          kind: if contribution
+                  :investment_contribution
+                elsif Transaction::INTERNAL_MOVEMENT_LABELS.include?(label)
+                  :funds_movement
+                else
+                  :standard
+                end,
           entry: Entry.new(
             account: account,
             date: row.date_iso,
@@ -176,10 +183,9 @@ class PdfImport < Import
       update!(account: account)
       # A statement with no extracted rows (e.g. an investment statement with
       # no cash activity that period) never reaches import!, which is where
-      # this normally runs -- without it here too, picking an account for one
-      # of these never backfills the opening balance its own extracted data
-      # already has.
-      backfill_opening_balance!
+      # this normally runs. Anything with rows waits for publishing, so a
+      # wrong pick can still be re-targeted before it touches an anchor.
+      backfill_opening_balance!(sync: true) unless has_extracted_transactions?
 
       if (statement = account_statement)
         statement.lock!
@@ -311,8 +317,14 @@ class PdfImport < Import
     extracted_data.present? && extracted_data["transactions"].present?
   end
 
+  # Read by views and the job several times per request; recomputed only when
+  # the data or the assigned account changes.
   def extracted_transactions
-    filter_to_assigned_account(correct_self_referential_transfers(extracted_data&.dig("transactions") || []))
+    key = [ extracted_data.hash, account_id ]
+    return @extracted_transactions if @extracted_transactions_key == key
+
+    @extracted_transactions_key = key
+    @extracted_transactions = filter_to_assigned_account(correct_self_referential_transfers(extracted_data&.dig("transactions") || []))
   end
 
   # Every distinct account_number seen across the extracted transactions, for a
@@ -321,8 +333,16 @@ class PdfImport < Import
   # statement -- the overwhelming common case -- has at most one.
   def detected_account_numbers
     nums = extracted_data&.dig("account_numbers").presence ||
-      (extracted_data&.dig("transactions") || []).map { |t| t["account_number"] }.compact.uniq
-    nums.presence || [ detected_account_number ].compact
+      (extracted_data&.dig("transactions") || []).map { |t| t["account_number"] }
+    nums = Array(nums).filter_map { |n| self.class.account_number_key(n) }.uniq
+    nums.presence || [ self.class.account_number_key(detected_account_number) ].compact
+  end
+
+  # The last four digits a statement identifies an account by, so "6654",
+  # "XXXX6654" and "****6654" are one account however the model wrote it.
+  def self.account_number_key(number)
+    digits = number.to_s.gsub(/\D/, "")
+    digits.last(4).presence
   end
 
   def generate_rows_from_extracted_data
@@ -572,7 +592,10 @@ class PdfImport < Import
     last4 = detected_account_number
     return nil if last4.blank?
 
-    matches = candidates.select { |a| self.class.account_identifying_text(a).include?(last4) }
+    simplefin_names = SimplefinAccount.where(id: candidates.map(&:simplefin_account_id).compact).pluck(:id, :name).to_h
+    matches = candidates.select do |a|
+      self.class.account_identifying_text(a, simplefin_name: simplefin_names[a.simplefin_account_id]).include?(last4)
+    end
     matches.first if matches.one?
   end
 
@@ -583,10 +606,10 @@ class PdfImport < Import
   # renames the account afterward (e.g. to "Ally Checking Account") loses the
   # digits the naming convention relies on, even though the underlying
   # connection's own name still has them.
-  def self.account_identifying_text(account)
+  def self.account_identifying_text(account, simplefin_name: nil)
     return account.name.to_s if account.simplefin_account_id.blank?
 
-    simplefin_name = SimplefinAccount.where(id: account.simplefin_account_id).pick(:name)
+    simplefin_name ||= SimplefinAccount.where(id: account.simplefin_account_id).pick(:name)
     [ account.name, simplefin_name ].compact.join(" ")
   end
 
@@ -629,8 +652,8 @@ class PdfImport < Import
       return transactions if numbers.size != 2
 
       transactions.map do |t|
-        acct = t["account_number"]
-        counterparty = t["transfer_counterparty_account_number"]
+        acct = self.class.account_number_key(t["account_number"])
+        counterparty = self.class.account_number_key(t["transfer_counterparty_account_number"])
         next t if acct.blank? || counterparty.blank? || acct != counterparty
 
         other = numbers.find { |n| n != acct }
@@ -660,7 +683,10 @@ class PdfImport < Import
       own_number = own_account_number
       return transactions if own_number.blank?
 
-      transactions.select { |t| t["account_number"].blank? || t["account_number"] == own_number }
+      transactions.select do |t|
+        number = self.class.account_number_key(t["account_number"])
+        number.blank? || number == own_number
+      end
     end
 
     # This import's own account's number, among the statement's detected
@@ -673,28 +699,29 @@ class PdfImport < Import
       numbers = detected_account_numbers
       return nil if numbers.size <= 1
 
-      numbers.find { |n| self.class.account_identifying_text(account).include?(n) }
+      text = self.class.account_identifying_text(account)
+      numbers.find { |n| text.include?(n) }
     end
 
     # The {opening_balance:, period_start:} this import's own account should
     # backfill from. A single-account statement just has the extraction's
     # top-level fields. A combined statement reports a separate entry per
     # account in "accounts" (see e.g. Provider::Openai::BankStatementExtractor)
-    # -- this picks out the one matching this account's own number, falling
-    # back to the top-level fields whenever that match can't be made (the same
-    # cases #own_account_number itself returns nil for).
+    # -- this picks out the one matching this account's own number. A combined
+    # statement never falls back to the top-level fields: those describe
+    # whichever account the extractor read first, so with no entry of its own
+    # this account is left alone rather than given another account's balance.
     def backfill_candidate
-      fallback = {
-        "opening_balance" => extracted_data&.dig("opening_balance"),
-        "period_start" => extracted_data&.dig("period", "start_date")
-      }
+      if detected_account_numbers.size <= 1
+        return {
+          "opening_balance" => extracted_data&.dig("opening_balance"),
+          "period_start" => extracted_data&.dig("period", "start_date")
+        }
+      end
 
       number = own_account_number
-      accounts = extracted_data&.dig("accounts")
-      return fallback if number.blank? || accounts.blank?
-
-      match = accounts.find { |a| a["account_number"] == number }
-      return fallback if match.blank?
+      match = number && Array(extracted_data&.dig("accounts")).find { |a| self.class.account_number_key(a["account_number"]) == number }
+      return {} if match.blank?
 
       { "opening_balance" => match["opening_balance"], "period_start" => match["period_start"] }
     end
@@ -718,7 +745,7 @@ class PdfImport < Import
     # malformed or missing opening_balance/period on the extracted data leaves
     # the account exactly as it was; the user can still set one by hand from
     # the account settings.
-    def backfill_opening_balance!
+    def backfill_opening_balance!(sync: false)
       candidate = backfill_candidate
       opening_balance = candidate["opening_balance"]
       period_start_str = candidate["period_start"]
@@ -729,10 +756,14 @@ class PdfImport < Import
       return if account.has_opening_anchor? && anchor_date >= account.opening_anchor_date
       return if account.entries.where("date < ?", period_start).exists?
 
-      Account::OpeningBalanceManager.new(account).set_opening_balance(
+      result = Account::OpeningBalanceManager.new(account).set_opening_balance(
         balance: opening_balance,
         date: anchor_date
       )
+      # import! syncs the account itself once publishing finishes; outside it
+      # nothing else would.
+      account.sync_later if sync && result.success? && result.changes_made?
+      result
     rescue ArgumentError, TypeError
       nil
     end
