@@ -108,11 +108,27 @@ class Provider::Anthropic::InvestmentStatementExtractor
               required: [],
               additionalProperties: false
             },
-            opening_balance: { type: [ "number", "null" ] },
-            closing_balance: { type: [ "number", "null" ] },
+            opening_balance: { type: [ "number", "null" ], description: "null when this statement does not state a balance figure anywhere (e.g. a transaction-ledger export with no account-value summary line) -- do not use 0 to mean 'not found'; 0 means the statement itself states the balance is exactly zero." },
+            closing_balance: { type: [ "number", "null" ], description: "Same rule as opening_balance: null when not stated, never as a stand-in for 'not found'." },
+            accounts: {
+              type: "array",
+              description: "One entry per account the document covers. A single-account statement has exactly one; a combined statement (e.g. a brokerage + HSA + 401k statement from the same provider, each on its own pages) has one per account section, each with its own balances and period.",
+              items: {
+                type: "object",
+                properties: {
+                  account_number: { type: [ "string", "null" ], description: "Last 4 digits." },
+                  opening_balance: { type: [ "number", "null" ], description: "null when not stated anywhere in this account's section -- never 0 as a stand-in for 'not found'." },
+                  closing_balance: { type: [ "number", "null" ], description: "Same rule as opening_balance: null when not stated, never as a stand-in for 'not found'." },
+                  period_start: { type: [ "string", "null" ], description: "YYYY-MM-DD" },
+                  period_end: { type: [ "string", "null" ], description: "YYYY-MM-DD" }
+                },
+                required: [],
+                additionalProperties: false
+              }
+            },
             transactions: {
               type: "array",
-              description: "Every cash-moving activity in the statement, in document order. Never a buy/sell trade or a holding/position.",
+              description: "Every DISTINCT real-world cash-moving event in the statement, in document order. Never a buy/sell trade or a holding/position. Each event appears exactly once, even if the statement itself prints it more than once (see instructions).",
               items: {
                 type: "object",
                 properties: {
@@ -120,7 +136,11 @@ class Provider::Anthropic::InvestmentStatementExtractor
                   description: { type: "string" },
                   amount: { type: "number", description: "Negative for money leaving the account, positive for money arriving." },
                   activity_type: { type: [ "string", "null" ], description: "One of: Dividend, Interest, Fee, Contribution, Withdrawal, Other" },
-                  security: { type: [ "string", "null" ], description: "Ticker or fund name this activity is tied to, if any." }
+                  security: { type: [ "string", "null" ], description: "Ticker or fund name this activity is tied to, if any." },
+                  account_number: {
+                    type: [ "string", "null" ],
+                    description: "Last 4 digits of the account THIS activity belongs to. Only needed when the document combines more than one account (e.g. a brokerage + HSA + 401k statement from the same provider); null or omitted for an ordinary single-account statement."
+                  }
                 },
                 required: [ "date", "description", "amount" ],
                 additionalProperties: false
@@ -145,10 +165,32 @@ class Provider::Anthropic::InvestmentStatementExtractor
 
         Rules:
           - Do NOT extract buy/sell trades of a security, unrealized gains/losses, holdings, positions, or balance summaries
+          - Do NOT extract an in-kind securities transfer (e.g. "Received From You", "Transferred In/Out",
+            a 401k-to-IRA rollover moving shares rather than cash, a plan-to-plan "Fund to Fund" exchange).
+            These move a security, not cash — they have $0 cash impact and must never be reported as a
+            transaction with a dollar amount equal to the security's value.
+          - Investment statements routinely print the SAME real-world event more than once: a dividend
+            typically appears once in a "Dividends, Interest & Other Income" table AND again in a
+            "Core Fund Activity" / core-account sweep ledger showing it being reinvested, and sometimes a
+            third time in a month-end "Taxable Dividends" or tax-summary subtotal. Report each distinct
+            real-world event EXACTLY ONCE. Prefer the specific dated activity-ledger line over any
+            subtotal, period-total, or tax-summary row that merely restates an amount from elsewhere on
+            the statement. A same-day "Dividend Received" paired with a "Reinvestment" of the identical
+            amount is ONE event (the dividend) — report it once, not as two transactions.
           - Negative amounts for money leaving the account, positive for money arriving
           - Dates in YYYY-MM-DD
           - Use null for any field you cannot read; do not invent values
+          - opening_balance and closing_balance specifically: a transaction-ledger export often has no
+            account-value summary line anywhere in the text. When that is the case, these must be null,
+            not 0 — 0 means the statement itself states the balance is exactly zero dollars, which is a
+            different fact than "no balance figure was printed here."
           - If genuinely no cash activity exists in this statement, return an empty transactions array
+          - Some statements combine multiple accounts in one document (e.g. a brokerage, an HSA, and a
+            401k from the same provider, each with its own account number and its own activity section —
+            common when a provider mails one combined statement per household). When that happens: set
+            each transaction's own account_number to the account whose section it actually appears in —
+            do not leave every transaction tagged with just the first account found — and report one
+            entry per account in "accounts", each with that account's own balances and period.
       INSTRUCTIONS
     end
 
@@ -180,10 +222,26 @@ class Provider::Anthropic::InvestmentStatementExtractor
         },
         account_holder: parsed["account_holder"] || parsed[:account_holder],
         account_number: parsed["account_number"] || parsed[:account_number],
+        account_numbers: transactions.map { |t| t[:account_number] }.compact.uniq,
+        accounts: normalize_accounts(parsed["accounts"] || parsed[:accounts]),
         bank_name: parsed["bank_name"] || parsed[:bank_name],
         opening_balance: parsed["opening_balance"] || parsed[:opening_balance],
         closing_balance: parsed["closing_balance"] || parsed[:closing_balance]
       }
+    end
+
+    def normalize_accounts(accounts)
+      Array(accounts).filter_map do |a|
+        next nil unless a.is_a?(Hash)
+
+        {
+          account_number: a["account_number"] || a[:account_number],
+          opening_balance: a["opening_balance"] || a[:opening_balance],
+          closing_balance: a["closing_balance"] || a[:closing_balance],
+          period_start: a["period_start"] || a[:period_start],
+          period_end: a["period_end"] || a[:period_end]
+        }
+      end
     end
 
     def dig_period(parsed, key)
@@ -200,7 +258,8 @@ class Provider::Anthropic::InvestmentStatementExtractor
         amount: parse_amount(txn["amount"] || txn[:amount]),
         name: txn["description"] || txn[:description] || txn["name"] || txn[:name],
         category: txn["activity_type"] || txn[:activity_type] || txn["category"] || txn[:category],
-        notes: txn["security"] || txn[:security] || txn["notes"] || txn[:notes]
+        notes: txn["security"] || txn[:security] || txn["notes"] || txn[:notes],
+        account_number: txn["account_number"] || txn[:account_number]
       }
     end
 

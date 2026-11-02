@@ -97,7 +97,7 @@ class Provider::Anthropic::BankStatementExtractor
           properties: {
             bank_name: { type: [ "string", "null" ] },
             account_holder: { type: [ "string", "null" ] },
-            account_number: { type: [ "string", "null" ], description: "Typically last 4 digits only." },
+            account_number: { type: [ "string", "null" ], description: "Typically last 4 digits only. When the document combines more than one account, this is the first account's -- rely on each transaction's own account_number instead." },
             statement_period: {
               type: "object",
               properties: {
@@ -107,8 +107,24 @@ class Provider::Anthropic::BankStatementExtractor
               required: [],
               additionalProperties: false
             },
-            opening_balance: { type: [ "number", "null" ] },
-            closing_balance: { type: [ "number", "null" ] },
+            opening_balance: { type: [ "number", "null" ], description: "The first account's, when the document combines more than one -- rely on the accounts array for the rest." },
+            closing_balance: { type: [ "number", "null" ], description: "The first account's, when the document combines more than one -- rely on the accounts array for the rest." },
+            accounts: {
+              type: "array",
+              description: "One entry per account the document covers. A single-account statement has exactly one; a combined statement (e.g. a checking + savings statement from the same bank) has one per account section, each with its own balances and period.",
+              items: {
+                type: "object",
+                properties: {
+                  account_number: { type: [ "string", "null" ], description: "Last 4 digits." },
+                  opening_balance: { type: [ "number", "null" ] },
+                  closing_balance: { type: [ "number", "null" ] },
+                  period_start: { type: [ "string", "null" ], description: "YYYY-MM-DD" },
+                  period_end: { type: [ "string", "null" ], description: "YYYY-MM-DD" }
+                },
+                required: [],
+                additionalProperties: false
+              }
+            },
             transactions: {
               type: "array",
               description: "Every transaction in the statement, in document order.",
@@ -119,7 +135,15 @@ class Provider::Anthropic::BankStatementExtractor
                   description: { type: "string" },
                   amount: { type: "number", description: "Negative for debits / expenses, positive for credits / deposits." },
                   reference: { type: [ "string", "null" ] },
-                  category: { type: [ "string", "null" ] }
+                  category: { type: [ "string", "null" ] },
+                  account_number: {
+                    type: [ "string", "null" ],
+                    description: "Last 4 digits of the account THIS transaction belongs to. Only needed when the document combines more than one account (e.g. a checking + savings statement); null or omitted for an ordinary single-account statement."
+                  },
+                  transfer_counterparty_account_number: {
+                    type: [ "string", "null" ],
+                    description: "For an internal transfer only: when the transaction's own description names an account number (e.g. 'transfer to Savings account 1234' or 'transfer from Checking 5678'), the number it names. Null for anything that isn't a transfer between the customer's own accounts. Just report the digits the description states -- do not try to work out which account this transaction should actually belong to; that is figured out separately."
+                  }
                 },
                 required: [ "date", "description", "amount" ],
                 additionalProperties: false
@@ -141,6 +165,17 @@ class Provider::Anthropic::BankStatementExtractor
           - Negative amounts for debits / expenses, positive for credits / deposits
           - Dates in YYYY-MM-DD
           - Use null for any field you cannot read; do not invent values
+          - Some statements combine multiple accounts in one document (e.g. a checking
+            and a savings account from the same bank, each with its own account number,
+            own opening/closing balance, and its own activity section). When that
+            happens: set each transaction's own account_number to the account whose
+            section it actually appears in -- do not leave every transaction tagged
+            with just the first account found -- and report one entry per account in
+            "accounts", each with that account's own balances and period.
+          - For a transaction that is an internal transfer whose own description names
+            an account number, put that number in transfer_counterparty_account_number.
+            Just report the digits the description states; do not try to work out which
+            account the transaction should actually belong to.
       INSTRUCTIONS
     end
 
@@ -175,10 +210,26 @@ class Provider::Anthropic::BankStatementExtractor
         },
         account_holder: parsed["account_holder"] || parsed[:account_holder],
         account_number: parsed["account_number"] || parsed[:account_number],
+        account_numbers: transactions.map { |t| t[:account_number] }.compact.uniq,
+        accounts: normalize_accounts(parsed["accounts"] || parsed[:accounts]),
         bank_name: parsed["bank_name"] || parsed[:bank_name],
         opening_balance: parsed["opening_balance"] || parsed[:opening_balance],
         closing_balance: parsed["closing_balance"] || parsed[:closing_balance]
       }
+    end
+
+    def normalize_accounts(accounts)
+      Array(accounts).filter_map do |a|
+        next nil unless a.is_a?(Hash)
+
+        {
+          account_number: a["account_number"] || a[:account_number],
+          opening_balance: a["opening_balance"] || a[:opening_balance],
+          closing_balance: a["closing_balance"] || a[:closing_balance],
+          period_start: a["period_start"] || a[:period_start],
+          period_end: a["period_end"] || a[:period_end]
+        }
+      end
     end
 
     def dig_period(parsed, key)
@@ -195,7 +246,9 @@ class Provider::Anthropic::BankStatementExtractor
         amount: parse_amount(txn["amount"] || txn[:amount]),
         name: txn["description"] || txn[:description] || txn["name"] || txn[:name],
         category: txn["category"] || txn[:category],
-        notes: txn["reference"] || txn[:reference]
+        notes: txn["reference"] || txn[:reference],
+        account_number: txn["account_number"] || txn[:account_number],
+        transfer_counterparty_account_number: txn["transfer_counterparty_account_number"] || txn[:transfer_counterparty_account_number]
       }
     end
 

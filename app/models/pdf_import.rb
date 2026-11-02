@@ -312,7 +312,17 @@ class PdfImport < Import
   end
 
   def extracted_transactions
-    extracted_data&.dig("transactions") || []
+    filter_to_assigned_account(correct_self_referential_transfers(extracted_data&.dig("transactions") || []))
+  end
+
+  # Every distinct account_number seen across the extracted transactions, for a
+  # statement that combines more than one account on a single document (a
+  # checking + savings statement from the same bank, say). A single-account
+  # statement -- the overwhelming common case -- has at most one.
+  def detected_account_numbers
+    nums = extracted_data&.dig("account_numbers").presence ||
+      (extracted_data&.dig("transactions") || []).map { |t| t["account_number"] }.compact.uniq
+    nums.presence || [ detected_account_number ].compact
   end
 
   def generate_rows_from_extracted_data
@@ -559,8 +569,22 @@ class PdfImport < Import
     last4 = detected_account_number
     return nil if last4.blank?
 
-    matches = candidates.select { |a| a.name.to_s.include?(last4) }
+    matches = candidates.select { |a| self.class.account_identifying_text(a).include?(last4) }
     matches.first if matches.one?
+  end
+
+  # Text to match a statement's detected last-4 digits against: the account's
+  # own display name (the existing convention this app's naming puts them in,
+  # e.g. "Spending Account (6654)"), plus -- when the account was created from
+  # a SimpleFin connection -- the name SimpleFin itself reported. A user who
+  # renames the account afterward (e.g. to "Ally Checking Account") loses the
+  # digits the naming convention relies on, even though the underlying
+  # connection's own name still has them.
+  def self.account_identifying_text(account)
+    return account.name.to_s if account.simplefin_account_id.blank?
+
+    simplefin_name = SimplefinAccount.where(id: account.simplefin_account_id).pick(:name)
+    [ account.name, simplefin_name ].compact.join(" ")
   end
 
   def statement_backed?
@@ -582,6 +606,96 @@ class PdfImport < Import
 
   private
 
+    # A real statement can describe a transfer in a way that names the WRONG
+    # side's own account by mistake (Ally's "WEB Funds Transfer ... from
+    # Interest Checking account XXXXXX6654" sitting in the Checking section
+    # itself is exactly this: XXXXXX6654 is Checking's own number, so a
+    # transaction already tagged account_number XXXXXX6654 can't also be "from"
+    # XXXXXX6654 -- one of the two is wrong). The extractor is asked to read
+    # transfer_counterparty_account_number off the transaction's own text
+    # without trying to reason about which account is correct (see e.g.
+    # Provider::Openai::BankStatementExtractor); this is where that gets
+    # resolved, deterministically rather than hoping the model guesses right.
+    #
+    # Only correctable when exactly two accounts are on the statement: with
+    # exactly one alternative to the self-named number, that alternative must
+    # be the transaction's real account. Three or more leaves genuine
+    # ambiguity about which of the others is right, so those are left alone.
+    def correct_self_referential_transfers(transactions)
+      numbers = detected_account_numbers
+      return transactions if numbers.size != 2
+
+      transactions.map do |t|
+        acct = t["account_number"]
+        counterparty = t["transfer_counterparty_account_number"]
+        next t if acct.blank? || counterparty.blank? || acct != counterparty
+
+        other = numbers.find { |n| n != acct }
+        other.present? ? t.merge("account_number" => other) : t
+      end
+    end
+
+    # A combined statement (checking + savings from the same bank on one PDF,
+    # say) extracts into a single flat transactions array, each row tagged
+    # with the account_number of whichever section it came from (see
+    # Provider::Openai::BankStatementExtractor). This import is bound to one
+    # Sure account, so once more than one account_number shows up, every row
+    # NOT belonging to this import's own account would otherwise get imported
+    # here too -- the exact bug this guards against.
+    #
+    # Matched via .account_identifying_text (the same text #suggested_account
+    # matches a statement to an account against). Falls back to importing
+    # everything, unfiltered, whenever that match can't be made cleanly --
+    # a single-account statement (account present but no digits, or only one
+    # account_number detected across the whole document), or a multi-account
+    # statement where this account's own number isn't among those detected
+    # (silently dropping every row would be worse than the duplicate-risk this
+    # exists to prevent).
+    def filter_to_assigned_account(transactions)
+      return transactions if account.blank?
+
+      own_number = own_account_number
+      return transactions if own_number.blank?
+
+      transactions.select { |t| t["account_number"].blank? || t["account_number"] == own_number }
+    end
+
+    # This import's own account's number, among the statement's detected
+    # account_numbers -- nil whenever there's nothing to disambiguate (a
+    # single-account statement, or no account assigned yet) or the match
+    # can't be made cleanly (this account's number isn't among those found).
+    def own_account_number
+      return nil if account.blank?
+
+      numbers = detected_account_numbers
+      return nil if numbers.size <= 1
+
+      numbers.find { |n| self.class.account_identifying_text(account).include?(n) }
+    end
+
+    # The {opening_balance:, period_start:} this import's own account should
+    # backfill from. A single-account statement just has the extraction's
+    # top-level fields. A combined statement reports a separate entry per
+    # account in "accounts" (see e.g. Provider::Openai::BankStatementExtractor)
+    # -- this picks out the one matching this account's own number, falling
+    # back to the top-level fields whenever that match can't be made (the same
+    # cases #own_account_number itself returns nil for).
+    def backfill_candidate
+      fallback = {
+        "opening_balance" => extracted_data&.dig("opening_balance"),
+        "period_start" => extracted_data&.dig("period", "start_date")
+      }
+
+      number = own_account_number
+      accounts = extracted_data&.dig("accounts")
+      return fallback if number.blank? || accounts.blank?
+
+      match = accounts.find { |a| a["account_number"] == number }
+      return fallback if match.blank?
+
+      { "opening_balance" => match["opening_balance"], "period_start" => match["period_start"] }
+    end
+
     # A statement rarely covers the account's whole history -- it describes one
     # period, and whatever came before it is simply absent from what was
     # uploaded. Without an opening balance, every balance series/chart/return
@@ -591,26 +705,30 @@ class PdfImport < Import
     # balance exists to fill (every extractor returns one; see e.g.
     # Provider::Openai::BankStatementExtractor).
     #
-    # Only backfills when nothing already describes the account's balance
-    # before this statement: an existing opening anchor, or any entry predating
-    # the period, means this statement is not the earliest evidence the account
-    # has, and overwriting that with a guess would silently discard real data.
-    # Best-effort and never raises -- a malformed or missing opening_balance/
-    # period on the extracted data leaves the account exactly as it was; the
-    # user can still set one by hand from the account settings.
+    # Prefers whichever statement goes back furthest: a later upload whose
+    # period starts BEFORE the account's current opening anchor replaces it,
+    # rather than being skipped just because an anchor already exists. Still
+    # refuses whenever any real entry already predates this statement's
+    # period -- that means this statement is not actually the earliest
+    # evidence the account has, and overwriting the anchor with a guess would
+    # silently contradict real data. Best-effort and never raises -- a
+    # malformed or missing opening_balance/period on the extracted data leaves
+    # the account exactly as it was; the user can still set one by hand from
+    # the account settings.
     def backfill_opening_balance!
-      return if account.has_opening_anchor?
-
-      opening_balance = extracted_data&.dig("opening_balance")
-      period_start_str = extracted_data&.dig("period", "start_date")
+      candidate = backfill_candidate
+      opening_balance = candidate["opening_balance"]
+      period_start_str = candidate["period_start"]
       return if opening_balance.blank? || period_start_str.blank?
 
       period_start = Date.parse(period_start_str.to_s)
+      anchor_date = period_start - 1.day
+      return if account.has_opening_anchor? && anchor_date >= account.opening_anchor_date
       return if account.entries.where("date < ?", period_start).exists?
 
       Account::OpeningBalanceManager.new(account).set_opening_balance(
         balance: opening_balance,
-        date: period_start - 1.day
+        date: anchor_date
       )
     rescue ArgumentError, TypeError
       nil

@@ -27,13 +27,40 @@ class Provider::Openai::InvestmentStatementExtractor
 
     all_transactions = []
     metadata = {}
+    account_numbers = []
+    # Per-account opening/closing balance, keyed by account_number — same
+    # reasoning as Provider::Openai::BankStatementExtractor#extract: a combined
+    # statement (brokerage + HSA + 401k from the same provider, say) reports a
+    # different balance pair per account section, each stated only once on
+    # whichever chunk that section's summary lands in.
+    accounts_meta = {}
 
     chunks.each_with_index do |chunk, index|
       Rails.logger.info("InvestmentStatementExtractor: Processing chunk #{index + 1}/#{chunks.size}")
+      # Every chunk (not just the first) is asked for its own account_number.
+      # A combined statement starts a fresh account header on its own page, so
+      # the per-page chunking above already segments the document by account —
+      # without re-asking here, every chunk after the first silently inherits
+      # no account context, and a second account's activity ends up tagged as
+      # the first account's with nothing downstream able to tell them apart.
       result = process_chunk(chunk, index == 0)
+      chunk_account_number = result[:account_number]
+      account_numbers << chunk_account_number if chunk_account_number.present?
 
-      # Tag transactions with chunk index for deduplication
-      tagged_transactions = (result[:transactions] || []).map { |t| t.merge(chunk_index: index) }
+      if chunk_account_number.present?
+        meta = accounts_meta[chunk_account_number] ||= {}
+        meta[:opening_balance] ||= result[:opening_balance] if result[:opening_balance].present?
+        meta[:closing_balance] = result[:closing_balance] if result[:closing_balance].present?
+        meta[:period_start] ||= result.dig(:period, :start_date) if result.dig(:period, :start_date).present?
+        meta[:period_end] = result.dig(:period, :end_date) if result.dig(:period, :end_date).present?
+      end
+
+      # Tag transactions with chunk index (for dedup) and the account_number
+      # detected on THIS chunk, so a multi-account statement's rows can later
+      # be filtered down to the one account this import is actually for.
+      tagged_transactions = (result[:transactions] || []).map do |t|
+        t.merge(chunk_index: index, account_number: t[:account_number] || chunk_account_number)
+      end
       all_transactions.concat(tagged_transactions)
 
       if index == 0
@@ -61,6 +88,8 @@ class Provider::Openai::InvestmentStatementExtractor
       period: metadata[:period] || {},
       account_holder: metadata[:account_holder],
       account_number: metadata[:account_number],
+      account_numbers: account_numbers.uniq,
+      accounts: accounts_meta.map { |number, meta| meta.merge(account_number: number) },
       bank_name: metadata[:bank_name],
       opening_balance: metadata[:opening_balance],
       closing_balance: metadata[:closing_balance]
@@ -149,13 +178,16 @@ class Provider::Openai::InvestmentStatementExtractor
     def deduplicate_transactions(transactions)
       # Same chunk-boundary dedup as BankStatementExtractor — see that file's
       # comment for the accepted trade-off (a true same-day, same-amount,
-      # same-name duplicate at a chunk boundary is dropped too).
+      # same-name duplicate at a chunk boundary is dropped too). account_number
+      # is part of the key so two different accounts on a combined statement
+      # that happen to share a same-day, same-amount row near a chunk boundary
+      # aren't wrongly collapsed into one.
       seen = Set.new
       transactions.select do |t|
-        key = [ t[:date], t[:amount], t[:name], t[:chunk_index] ]
+        key = [ t[:date], t[:amount], t[:name], t[:account_number], t[:chunk_index] ]
 
         duplicate = seen.any? do |prev_key|
-          prev_key[0..2] == key[0..2] && (prev_key[3] - key[3]).abs <= 1
+          prev_key[0..3] == key[0..3] && (prev_key[4] - key[4]).abs <= 1
         end
 
         seen << key
@@ -170,7 +202,8 @@ class Provider::Openai::InvestmentStatementExtractor
           amount: parse_amount(txn["amount"]),
           name: txn["description"] || txn["name"],
           category: txn["activity_type"] || txn["category"],
-          notes: txn["security"] || txn["notes"]
+          notes: txn["security"] || txn["notes"],
+          account_number: txn["account_number"]
         }
       end.compact
     end
@@ -196,7 +229,12 @@ class Provider::Openai::InvestmentStatementExtractor
     def instructions_with_metadata
       <<~INSTRUCTIONS.strip
         Extract CASH activity from an investment/brokerage statement as JSON. Return:
-        {"bank_name":"...","account_holder":"...","account_number":"last 4 digits","statement_period":{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD"},"opening_balance":0.00,"closing_balance":0.00,"transactions":[{"date":"YYYY-MM-DD","description":"...","amount":-0.00,"activity_type":"Dividend|Interest|Fee|Contribution|Withdrawal|Other","security":"ticker or fund name, or null"}]}
+        {"bank_name":"...","account_holder":"...","account_number":"last 4 digits","statement_period":{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD"},"opening_balance":"a number, or null if not stated anywhere in this text","closing_balance":"a number, or null if not stated anywhere in this text","transactions":[{"date":"YYYY-MM-DD","description":"...","amount":-0.00,"activity_type":"Dividend|Interest|Fee|Contribution|Withdrawal|Other","security":"ticker or fund name, or null","account_number":"last 4 digits, or null"}]}
+
+        opening_balance and closing_balance: use null, not 0.00, when this chunk's text does not
+        actually state a balance figure anywhere (a transaction-ledger export with no account-value
+        summary line is common -- do not treat "I didn't find one" as "the balance is zero").
+        0.00 means the statement itself states the balance is exactly zero dollars.
 
         ONLY extract activity that moves cash in or out of the account:
           - Dividend or interest payments (positive amount)
@@ -208,6 +246,20 @@ class Provider::Openai::InvestmentStatementExtractor
           - Buy or sell trades of a security (no "bought 10 shares of X" rows)
           - Unrealized gains/losses or holding/position values
           - Account value summaries or balances (those go in opening_balance/closing_balance above, not transactions)
+          - An in-kind securities transfer (e.g. "Received From You", "Transferred In/Out", a 401k-to-IRA
+            rollover moving shares rather than cash, a "Fund to Fund" exchange). These move a security,
+            not cash — $0 cash impact, never report a dollar amount equal to the security's value.
+
+        #{duplicate_event_rule}
+
+        This text is one chunk of a larger statement and may cover only part of it, so "account_number",
+        "opening_balance", "closing_balance", and "statement_period" should describe only the account
+        whose activity actually appears in THIS chunk. Some statements combine multiple accounts (e.g. a
+        brokerage, an HSA, and a 401k from the same provider mailed as one combined statement) in one
+        document, each with its own account number, its own opening/closing balance, and its own activity
+        section — if this chunk starts a new account's section, report THAT account's numbers, not an
+        earlier account's carried over from a prior chunk, and set each transaction's own "account_number"
+        to the account whose section it actually appears in.
 
         Rules: Negative amounts for money leaving the account, positive for money arriving. Dates as YYYY-MM-DD. Include the security/fund name in "security" when the activity is tied to one (e.g. a dividend from a specific fund), otherwise null. If genuinely no cash activity exists in this statement, return an empty transactions array — do not invent rows. JSON only, no markdown.
       INSTRUCTIONS
@@ -216,9 +268,30 @@ class Provider::Openai::InvestmentStatementExtractor
     def instructions_transactions_only
       <<~INSTRUCTIONS.strip
         Extract CASH activity from investment/brokerage statement text as JSON. Return:
-        {"transactions":[{"date":"YYYY-MM-DD","description":"...","amount":-0.00,"activity_type":"Dividend|Interest|Fee|Contribution|Withdrawal|Other","security":"ticker or fund name, or null"}]}
+        {"transactions":[{"date":"YYYY-MM-DD","description":"...","amount":-0.00,"activity_type":"Dividend|Interest|Fee|Contribution|Withdrawal|Other","security":"ticker or fund name, or null","account_number":"last 4 digits, or null"}]}
 
-        ONLY extract activity that moves cash in or out of the account (dividends, interest, fees, contributions, withdrawals) — never buy/sell trades, holdings, or balance summaries. Negative amounts for money leaving the account, positive for money arriving. Dates as YYYY-MM-DD. If genuinely no cash activity exists, return an empty transactions array. JSON only, no markdown.
+        ONLY extract activity that moves cash in or out of the account (dividends, interest, fees, contributions, withdrawals) — never buy/sell trades, holdings, balance summaries, or an in-kind securities transfer (those move a security, not cash, and have $0 cash impact).
+
+        #{duplicate_event_rule}
+
+        This text is one chunk of a larger statement. Some statements combine multiple accounts (e.g. a
+        brokerage, an HSA, and a 401k from the same provider) in one document, each with its own activity
+        section — if this chunk covers a different account than earlier chunks, set each transaction's own
+        "account_number" to the account whose section it actually appears in; null or omit it for an
+        ordinary single-account statement.
+
+        Negative amounts for money leaving the account, positive for money arriving. Dates as YYYY-MM-DD. If genuinely no cash activity exists, return an empty transactions array. JSON only, no markdown.
       INSTRUCTIONS
+    end
+
+    def duplicate_event_rule
+      "Investment statements routinely print the SAME real-world event more than once: a dividend " \
+      "typically appears once in a \"Dividends, Interest & Other Income\" table AND again in a \"Core " \
+      "Fund Activity\" / core-account sweep ledger showing it being reinvested, and sometimes a third " \
+      "time in a month-end \"Taxable Dividends\" or tax-summary subtotal. Report each distinct " \
+      "real-world event EXACTLY ONCE. Prefer the specific dated activity-ledger line over any subtotal, " \
+      "period-total, or tax-summary row that merely restates an amount from elsewhere in this text. A " \
+      "same-day \"Dividend Received\" paired with a \"Reinvestment\" of the identical amount is ONE " \
+      "event (the dividend) — report it once, not as two transactions."
     end
 end
