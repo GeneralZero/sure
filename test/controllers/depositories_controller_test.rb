@@ -121,6 +121,27 @@ class DepositoriesControllerTest < ActionDispatch::IntegrationTest
     assert_select "select[name='account[currency]']:not([disabled])", count: 1
   end
 
+  test "moving only the opening date keeps a balance change made in the same save" do
+    account = @user.family.accounts.create!(name: "Fresh Cash", balance: 1000, currency: "USD", accountable: Depository.new, owner: @user)
+    account.set_opening_anchor_balance(balance: 1000, date: 1.year.ago.to_date)
+    account.reload
+    new_date = 2.years.ago.to_date
+
+    patch depository_path(account), params: {
+      account: {
+        balance: "1200",
+        opening_balance_amount: account.opening_anchor_balance.to_s,
+        opening_balance_date: new_date.to_s
+      }
+    }
+
+    account = Account.find(account.id) # reload keeps the memoized anchor
+    assert_equal new_date, account.opening_anchor_date
+    # With no reconciliations, set_current_balance moves the anchor by the
+    # delta; the date change must not put the loaded 1000 back.
+    assert_equal 1200, account.opening_anchor_balance.to_i
+  end
+
   test "update does not create an opening anchor for an account without one" do
     account = accounts(:depository)
     refute account.has_opening_anchor?
