@@ -26,15 +26,17 @@
 
     <%# A persisted account's own :balance means "today's balance" (routed
         through set_current_balance), not the opening anchor -- these two
-        fields are the only UI path to correct the anchor itself afterward,
-        including pushing its date earlier once older history has been
-        backfilled (e.g. via a PDF statement import). %>
-    <% if account.persisted? && !account.linked? %>
+        fields correct the anchor itself, including pushing its date earlier
+        once older history has been backfilled. Shown only when an anchor
+        exists: the date pre-filled for an account without one is derived
+        from its entries and would be refused on save. %>
+    <% if account.persisted? && !account.linked? && account.has_opening_anchor? %>
       <%= form.money_field :opening_balance_amount,
           label: t(".opening_balance_amount_label"),
           value: account.opening_anchor_balance,
           required: true,
-          default_currency: Current.family.currency %>
+          default_currency: account.currency,
+          disable_currency: true %>
 
       <%= form.date_field :opening_balance_date,
           label: t(".opening_balance_date_label"),
