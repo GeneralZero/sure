@@ -279,4 +279,79 @@ class SimplefinEntry::ProcessorTest < ActiveSupport::TestCase
     sf = entry.transaction.extra.fetch("simplefin")
     assert_equal false, sf["pending"], "expected a non-numeric posted value to not be inferred as pending"
   end
+
+  test "does not negate the amount for a CreditCard account" do
+    # SimpleFin's spec defines the sign once, uniformly: "positive = deposited
+    # into the account." For a CreditCard that's a debt ledger, not a cash
+    # one -- a charge that increases what's owed (raw positive) is already
+    # Sure's expense convention (positive); a payment that reduces it (raw
+    # negative) is already Sure's liability-reducing-credit convention
+    # (negative). Negating on top of that, as depository accounts need,
+    # inverts both.
+    credit_card_account = accounts(:credit_card)
+    credit_card_sfa = SimplefinAccount.create!(
+      simplefin_item: @simplefin_item,
+      name: "SF Credit Card",
+      account_id: "sf_acc_cc",
+      account_type: "credit_card",
+      currency: "USD",
+      current_balance: 500,
+      available_balance: 500,
+      account: credit_card_account
+    )
+
+    purchase = {
+      id: "tx_cc_purchase", amount: "25.00", currency: "USD",
+      payee: "Grocery Store", posted: Date.current.to_s, transacted_at: (Date.current - 1).to_s
+    }
+    payment = {
+      id: "tx_cc_payment", amount: "-200.00", currency: "USD",
+      payee: "Payment Thank You", posted: Date.current.to_s, transacted_at: (Date.current - 1).to_s
+    }
+
+    SimplefinEntry::Processor.new(purchase, simplefin_account: credit_card_sfa).process
+    SimplefinEntry::Processor.new(payment, simplefin_account: credit_card_sfa).process
+
+    purchase_entry = credit_card_account.entries.find_by!(external_id: "simplefin_tx_cc_purchase")
+    payment_entry = credit_card_account.entries.find_by!(external_id: "simplefin_tx_cc_payment")
+
+    assert_equal BigDecimal("25.00"), purchase_entry.amount, "a charge must land positive (an expense), not negated into income"
+    assert_equal BigDecimal("-200.00"), payment_entry.amount, "a payment must land negative (reduces the liability), not negated into an expense"
+  end
+
+  test "does not negate the amount for a Loan account" do
+    loan_account = accounts(:loan)
+    loan_sfa = SimplefinAccount.create!(
+      simplefin_item: @simplefin_item,
+      name: "SF Mortgage",
+      account_id: "sf_acc_loan",
+      account_type: "loan",
+      currency: "USD",
+      current_balance: 500000,
+      available_balance: 0,
+      account: loan_account
+    )
+
+    repayment = {
+      id: "tx_loan_payment", amount: "-1500.00", currency: "USD",
+      payee: "Mortgage Payment", posted: Date.current.to_s, transacted_at: (Date.current - 1).to_s
+    }
+
+    SimplefinEntry::Processor.new(repayment, simplefin_account: loan_sfa).process
+
+    entry = loan_account.entries.find_by!(external_id: "simplefin_tx_loan_payment")
+    assert_equal BigDecimal("-1500.00"), entry.amount, "a repayment must land negative, matching the loan_payment kind heuristic in Account::ProviderImportAdapter"
+  end
+
+  test "still negates the amount for a depository account (regression)" do
+    tx = {
+      id: "tx_depository_expense", amount: "-50.00", currency: "USD",
+      payee: "Restaurant", posted: Date.current.to_s, transacted_at: (Date.current - 1).to_s
+    }
+
+    SimplefinEntry::Processor.new(tx, simplefin_account: @simplefin_account).process
+
+    entry = @account.entries.find_by!(external_id: "simplefin_tx_depository_expense")
+    assert_equal BigDecimal("50.00"), entry.amount, "a depository expense must still be negated into Sure's positive-expense convention"
+  end
 end

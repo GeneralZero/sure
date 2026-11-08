@@ -134,6 +134,8 @@ class SimplefinEntry::Processor
       end
     end
 
+    LIABILITY_ACCOUNTABLE_TYPES = %w[CreditCard Loan].freeze
+
     def amount
       parsed_amount = case data[:amount]
       when String
@@ -144,13 +146,28 @@ class SimplefinEntry::Processor
         BigDecimal("0")
       end
 
-      # SimpleFin uses banking convention (expenses negative, income positive)
-      # Maybe expects opposite convention (expenses positive, income negative)
-      # So we negate the amount to convert from SimpleFin to Maybe format
-      -parsed_amount
+      # SimpleFin's own spec defines the sign once, the same way for every
+      # account type: "Positive numbers indicate money being deposited into
+      # the account" (simplefin.org/protocol.html). For a depository account
+      # that's banking convention (expenses negative, income positive) --
+      # opposite of Sure's (expenses positive, income negative), so negating
+      # converts it. For a CreditCard/Loan, applying that same one-sentence
+      # rule to a debt ledger instead of a cash one flips which side is
+      # already Sure's convention: a charge that *increases* what's owed is
+      # itself a "deposit" into that ledger, i.e. already positive the way
+      # Sure wants an expense to be; a payment that *reduces* it is already
+      # negative, the way Sure wants a liability-reducing credit to be.
+      # Negating here, on top of that, inverted both -- a real Fidelity Visa
+      # card then showed purchases as income and the card payment as an
+      # expense, exactly backwards.
+      liability_account? ? parsed_amount : -parsed_amount
     rescue ArgumentError => e
       Rails.logger.error "Failed to parse SimpleFin transaction amount: #{data[:amount].inspect} - #{e.message}"
       raise
+    end
+
+    def liability_account?
+      LIABILITY_ACCOUNTABLE_TYPES.include?(account.accountable_type)
     end
 
     def currency
