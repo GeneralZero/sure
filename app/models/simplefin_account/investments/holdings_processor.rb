@@ -83,7 +83,19 @@ class SimplefinAccount::Investments::HoldingsProcessor
         # Skip zero positions with no value to avoid invisible rows
         next if qty.to_d.zero? && computed_amount.to_d.zero?
 
-        currency = simplefin_holding["currency"].presence || "USD"
+        # Holding#amount is the position's dollar value, denominated in the
+        # account's own currency, never the asset it's a position in -- a
+        # Grayscale Ethereum Mini Trust ETF (symbol ETH) reports
+        # simplefin_holding["currency"] => "ETH" too, which Sure's own crypto
+        # currency registry accepts as a *valid* Money::Currency (it's a real
+        # on-chain-asset entry, not SimpleFin sending garbage), so a plain
+        # presence/validity check doesn't catch it. That "ETH" is simply the
+        # wrong currency for a dollar-valued ETF position: it raised
+        # UnknownCurrencyError for other misreported tickers anyway, and
+        # even where it happened to resolve, it mislabeled a USD market
+        # value as ETH. The account's own currency is authoritative for
+        # what currency its holdings' values are in, crypto security or not.
+        currency = account.currency.presence || "USD"
         position = positions[[ security.id, currency, holding_date ]] ||= {
           security: security,
           currency: currency,
@@ -237,13 +249,16 @@ class SimplefinAccount::Investments::HoldingsProcessor
     end
 
     def resolve_security(symbol, description)
-      # Normalize crypto tickers to a distinct namespace so they don't collide with equities
+      # Normalize crypto tickers to a distinct namespace so they don't collide with equities.
+      # Judged by the account, not the symbol or description: a ticker like ETH/BTC/SOL is
+      # also a real exchange-traded ETF (the Grayscale Ethereum Mini Trust ETF reports
+      # symbol "ETH", description "Ethereum" -- matching a bare symbol/description check
+      # with nothing crypto-specific to catch), and mislabeling that ETF CRYPTO:ETH put it
+      # in the wrong security namespace on top of the currency bug fixed above.
       sym = symbol.to_s.upcase
       is_crypto_account = account&.accountable_type == "Crypto" || simplefin_account.name.to_s.downcase.include?("crypto")
-      is_crypto_symbol  = %w[BTC ETH SOL DOGE LTC BCH].include?(sym)
-      mentions_crypto   = description.to_s.downcase.include?("crypto")
 
-      if !sym.include?(":") && (is_crypto_account || is_crypto_symbol || mentions_crypto)
+      if !sym.include?(":") && is_crypto_account
         sym = "CRYPTO:#{sym}"
       end
 

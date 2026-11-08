@@ -329,4 +329,74 @@ class SimplefinAccount::Investments::HoldingsProcessorTest < ActiveSupport::Test
     # but the basis is unknown for the position as a whole, NOT $100/share
     assert_nil position[:cost_basis]
   end
+
+  # Regression for GH #2856: the Grayscale Ethereum Mini Trust ETF (symbol
+  # ETH) reports on a regular Investment account, not a Crypto one. A bare
+  # symbol/description match alone can't tell that apart from a genuine
+  # on-chain ETH holding.
+  test "does not namespace an Investment account's holding into CRYPTO: just because the symbol matches a crypto ticker" do
+    account = accounts(:investment)
+    etf_security = Security.create!(ticker: "ETH", name: "Grayscale Ethereum Mini Trust ETF")
+    processor = SimplefinAccount::Investments::HoldingsProcessor.new(nil)
+    processor.stubs(:account).returns(account)
+    processor.stubs(:simplefin_account).returns(stub(id: "sfa-eth-etf", name: "Brokerage Account", account_provider: nil))
+
+    resolved = processor.send(:resolve_security, "ETH", "Ethereum")
+
+    assert_equal etf_security, resolved
+    assert_equal "ETH", resolved.ticker, "the real ETF ticker, not CRYPTO:ETH"
+  end
+
+  test "still namespaces a Crypto account's holding into CRYPTO:" do
+    crypto_account = accounts(:crypto)
+    crypto_security = Security.create!(ticker: "CRYPTO:ETH", name: "Ethereum")
+    processor = SimplefinAccount::Investments::HoldingsProcessor.new(nil)
+    processor.stubs(:account).returns(crypto_account)
+    processor.stubs(:simplefin_account).returns(stub(id: "sfa-real-eth", name: "Crypto Wallet", account_provider: nil))
+
+    resolved = processor.send(:resolve_security, "ETH", "Ethereum")
+
+    assert_equal crypto_security, resolved
+    assert_equal "CRYPTO:ETH", resolved.ticker
+  end
+
+  test "uses the account's own currency for a holding's value, not SimpleFin's possibly-wrong per-holding field" do
+    # SimpleFin reported "currency" => "ETH" for this same ETF, which Sure's
+    # own crypto currency registry accepts as a *valid* Money::Currency (a
+    # real on-chain-asset entry, not provider garbage), so simple presence
+    # validation never catches it. Holding#amount is always a dollar value
+    # in the account's own currency, regardless of what security it's a
+    # position in.
+    account = accounts(:investment)
+    security = securities(:aapl)
+    processor = SimplefinAccount::Investments::HoldingsProcessor.new(nil)
+
+    processor.stubs(:holdings_data).returns([
+      { "id" => "lot-eth-etf", "symbol" => "ETH", "shares" => "10", "market_value" => "230.57", "currency" => "ETH" }
+    ])
+    processor.stubs(:account).returns(account)
+    processor.stubs(:resolve_security).returns(security)
+    processor.stubs(:institution_reports_total_basis?).returns(false)
+    processor.stubs(:simplefin_account).returns(stub(id: "sfa-eth-etf", name: "Brokerage Account", account_provider: nil))
+
+    recorder = Class.new do
+      attr_reader :calls
+
+      def initialize = @calls = []
+
+      def import_holding(**kwargs)
+        @calls << kwargs
+        Struct.new(:id, :security_id, :qty, :amount, :currency, :date, :external_id)
+              .new("h", kwargs[:security].id, kwargs[:quantity], kwargs[:amount],
+                   kwargs[:currency], kwargs[:date], kwargs[:external_id])
+      end
+    end.new
+    processor.stubs(:import_adapter).returns(recorder)
+
+    processor.process
+
+    assert_equal 1, recorder.calls.size
+    assert_equal account.currency, recorder.calls.first[:currency]
+    assert_not_equal "ETH", recorder.calls.first[:currency]
+  end
 end
