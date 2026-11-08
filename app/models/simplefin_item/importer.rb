@@ -27,19 +27,38 @@ class SimplefinItem::Importer
     end
 
     begin
-      # Defensive guard: If last_synced_at is set but there are linked accounts
-      # with no transactions captured yet (typical after a balances-only run),
-      # force the first full run to use chunked history to backfill.
+      # Defensive guard: If last_synced_at is set but a linked account has no
+      # transactions captured yet (typical after a balances-only run, or an
+      # account relinked to a new upstream id after fixing a stale
+      # connection), force a chunked backfill for this item.
+      #
+      # Evaluated per-account (.any?), not item-wide (.all?): a SimpleFIN item
+      # commonly covers several institution logins sharing one access token,
+      # so one sibling account already having history must not stop a
+      # genuinely-blank sibling from ever qualifying for a backfill -- it
+      # would otherwise be stuck on import_regular_sync's narrow
+      # last_synced_at-based window forever, since last_synced_at on the
+      # item is also never nil once the item has synced before.
       #
       # Check for linked accounts via BOTH legacy FK (accounts.simplefin_account_id) AND
       # the new AccountProvider system. An account is "linked" if either association exists.
       linked_accounts = simplefin_item.simplefin_accounts.select { |sfa| sfa.current_account.present? }
-      no_txns_yet = linked_accounts.any? && linked_accounts.all? { |sfa| sfa.raw_transactions_payload.blank? }
+      no_txns_yet = linked_accounts.any? { |sfa| sfa.raw_transactions_payload.blank? }
 
       if simplefin_item.last_synced_at.nil? || no_txns_yet
         # First sync (or balances-only pre-run) — use chunked approach to get full history
         Rails.logger.info "SimplefinItem::Importer - Using CHUNKED HISTORY import (last_synced_at=#{simplefin_item.last_synced_at.inspect}, no_txns_yet=#{no_txns_yet})"
         import_with_chunked_history
+      elsif regular_sync_window_too_wide?
+        # The gap since the last successful sync has grown past what one
+        # request can safely cover. Without this, determine_sync_start_date's
+        # window only grows: a failed sync never advances last_synced_at, so
+        # the next attempt requests an even wider range and fails again --
+        # permanently, with no self-healing path. Walking the same gap back
+        # in chunk_size_days-sized chunks (the same safe size the first-sync
+        # backfill already uses) actually catches it up instead.
+        Rails.logger.info "SimplefinItem::Importer - Regular sync window too wide, falling back to CHUNKED HISTORY (last_synced_at=#{simplefin_item.last_synced_at&.strftime('%Y-%m-%d %H:%M')})"
+        import_with_chunked_history(target_start_date: determine_sync_start_date)
       else
         # Regular sync - use single request with buffer
         Rails.logger.info "SimplefinItem::Importer - Using REGULAR SYNC (last_synced_at=#{simplefin_item.last_synced_at&.strftime('%Y-%m-%d %H:%M')})"
@@ -378,25 +397,30 @@ class SimplefinItem::Importer
       )
     end
 
-    def import_with_chunked_history
-      # SimpleFin's actual limit is 60 days per request (not 365 as documented).
-      # SimpleFin typically only provides 60-90 days of history (bank-dependent).
-      # Use adaptive chunking: start with 2 chunks, continue if new data found,
-      # stop after 2 consecutive empty chunks. Max 6 chunks (360 days) for safety.
-      chunk_size_days = 60
-      max_requests = 6  # Down from 22 - SimpleFIN rarely provides >90 days anyway
+    # target_start_date lets a caller (the regular-sync-window-too-wide
+    # fallback in #import) specify exactly the gap it needs closed, instead
+    # of this method's own default lookback -- the gap since the last
+    # successful sync is usually much narrower than a fresh backfill's.
+    def import_with_chunked_history(target_start_date: nil)
+      # Use adaptive chunking: start with 2 chunks, continue if new data
+      # found, stop after 2 consecutive empty chunks.
+      chunk_size_days = simplefin_chunk_size_days
+      max_requests = 8
       current_end_date = Time.current
 
-      # Decide how far back to walk:
+      # Decide how far back to walk, when the caller didn't already supply an
+      # exact target:
       # - If the user set a custom sync_start_date, honor it
       # - Else, for first-time chunked history, walk back up to the provider-safe
       #   limit implied by chunking so we actually import meaningful history.
       #   We do NOT use the small initial lookback (7 days) here, because that
       #   would clip the very first chunk to ~1 week and prevent further history.
-      user_start_date = simplefin_item.sync_start_date
-      implied_max_lookback_days = chunk_size_days * max_requests
-      default_start_date = implied_max_lookback_days.days.ago
-      target_start_date = user_start_date ? user_start_date.beginning_of_day : default_start_date
+      unless target_start_date
+        user_start_date = simplefin_item.sync_start_date
+        implied_max_lookback_days = chunk_size_days * max_requests
+        default_start_date = implied_max_lookback_days.days.ago
+        target_start_date = user_start_date ? user_start_date.beginning_of_day : default_start_date
+      end
 
       # Enforce maximum 1-year lookback since SimpleFIN rarely provides more than 90 days
       # This saves unnecessary API calls while still covering edge cases
@@ -441,9 +465,6 @@ class SimplefinItem::Importer
 
         Rails.logger.info "SimpleFin chunked sync: fetching chunk #{chunk_count}/#{max_requests} (#{chunk_start_date.strftime('%Y-%m-%d')} to #{chunk_end_date.strftime('%Y-%m-%d')}) - #{actual_days} days"
 
-        # Count transactions before this chunk
-        pre_chunk_tx_count = count_linked_transactions
-
         accounts_data = fetch_accounts_data(start_date: chunk_start_date, end_date: chunk_end_date)
         return if accounts_data.nil? # Error already handled
 
@@ -477,9 +498,18 @@ class SimplefinItem::Importer
           end
         end
 
-        # Count new transactions in this chunk (adaptive stopping)
-        post_chunk_tx_count = count_linked_transactions
-        new_txns_in_chunk = [ post_chunk_tx_count - pre_chunk_tx_count, 0 ].max
+        # Count transactions in this chunk's own response (adaptive stopping).
+        # Diffing count_linked_transactions (stored payload size on linked
+        # accounts) before/after used to measure this instead, but that's
+        # zero growth in both syncs the normal setup flow actually runs: the
+        # sync at setup-token-claim time runs before anything is linked, and
+        # the sync after the setup screen re-fetches transactions the first
+        # sync already stored, so merging adds nothing either. Either way the
+        # loop hit "2 consecutive empty chunks" by chunk 2 while the chunks
+        # were still returning real data, capping every backfill at ~120
+        # days. Counting what this chunk actually returned, independent of
+        # whether anything is linked yet or already stored, fixes that.
+        new_txns_in_chunk = accounts_data[:accounts].to_a.sum { |acct| acct[:transactions]&.size.to_i }
         total_new_transactions += new_txns_in_chunk
 
         Rails.logger.info "SimpleFin chunked sync: chunk #{chunk_count} added #{new_txns_in_chunk} new transactions"
@@ -519,11 +549,24 @@ class SimplefinItem::Importer
       Rails.logger.info "SimpleFin chunked sync completed: #{chunk_count} chunks processed, #{total_accounts_imported} account records, #{total_new_transactions} new transactions#{stopped_early ? " (stopped early)" : ""}"
     end
 
-    # Count total transactions in linked SimpleFIN accounts (for adaptive chunking)
-    def count_linked_transactions
-      simplefin_item.simplefin_accounts
-        .select { |sfa| sfa.current_account.present? }
-        .sum { |sfa| sfa.raw_transactions_payload.to_a.size }
+    # True when the regular-sync window (the gap since the last successful
+    # sync, plus its own buffer) has grown past what a single request can
+    # safely cover. #import falls back to the same chunked, bounded-size
+    # requests the first-sync backfill uses instead of making one oversized
+    # request that will just fail again -- see #import's own comment.
+    def regular_sync_window_too_wide?
+      return false unless simplefin_item.last_synced_at
+
+      (Time.current - determine_sync_start_date) > simplefin_chunk_size_days.days
+    end
+
+    # SimpleFin's documented limit is 365 days, but in practice some
+    # institutions enforce a much tighter window and reject the request
+    # outright -- observed live: "Requested date range exceeds recommended
+    # range of 45 days." Overridable per-install for a Bridge enforcing an
+    # even tighter cap.
+    def simplefin_chunk_size_days
+      ENV.fetch("SIMPLEFIN_CHUNK_SIZE_DAYS", "44").to_i
     end
 
     def import_regular_sync
